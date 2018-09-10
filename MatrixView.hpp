@@ -22,6 +22,7 @@ public:
 
     int stride; /// Stride to next value in same row
 
+    MatrixView() : data(NULL), nrows(0), ncols(0), stride(0) {}
     MatrixView(double* A, int m, int n, int lda) : data(A), nrows(m), ncols(n), stride(lda) {}
 
     void prefetch(cudaStream_t stream, int gpu) const
@@ -56,7 +57,58 @@ public:
     {
         return subview(t.row, t.col, t.nrows, t.ncols);
     }
+
+    MatrixView localcopy(int row, int col, int nrows, int ncols, cudaStream_t stream)
+    {
+        MatrixView mv{NULL, nrows, ncols, nrows};
+        if (nrows * ncols != 0)
+        {
+            CUDA_CALL(cudaMalloc(&mv.data, sizeof(double) * nrows * ncols));
+            CUDA_CALL(cudaMemcpy2DAsync(mv.data, sizeof(double) * nrows, 
+                                        this->data + row + col * this->stride, sizeof(double) * this->stride,
+                                        nrows * sizeof(double), ncols, cudaMemcpyDefault,
+                                        stream));
+        }
+        return mv;
+    }
+
+    MatrixView localcopy(Tile t, cudaStream_t stream)
+    {
+        return localcopy(t.row, t.col, t.nrows, t.ncols, stream);
+    }
+
+    void copyback(int row, int col, MatrixView& mv, cudaStream_t stream)
+    {
+        CUDA_CALL(cudaMemcpy2DAsync(this->data + row + col * this->stride, sizeof(double) * this->stride,
+                                    mv.data, sizeof(double) * mv.nrows, 
+                                    mv.nrows * sizeof(double), mv.ncols, cudaMemcpyDefault,
+                                    stream));
+    }
+
+    void free()
+    {
+        CUDA_CALL(cudaFree(data));
+    }
 };
+
+std::vector<Tile> partitionCols(MatrixView& M, int ngpus) {
+    int perGpu = M.ncols / ngpus;
+
+    std::vector<Tile> tiles; tiles.reserve(ngpus);
+    if (M.ncols == 0)
+    {
+        for (int gpu = 0; gpu < ngpus; gpu++)
+            tiles.push_back({0, 0, 0, 0});
+    }
+    else
+    {
+        for (int col = 0; col < M.ncols; col += perGpu) {
+            tiles.push_back({0, col, M.nrows, perGpu});
+        }
+        tiles.back().ncols = M.ncols - tiles.back().col;
+    }
+    return tiles;
+}
 
 std::vector<Tile> partitionCols(MatrixView& M) {
     const int TILE_SIZE = 1024 * 2;
@@ -80,31 +132,12 @@ void dgemm(cublasHandle_t handle, double alpha, const MatrixView& A, const Matri
                 A.data, A.stride, B.data, B.stride, &beta, C.data, C.stride);
 }
 
-void m_dgemm(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, double alpha, const MatrixView& A, const MatrixView& B, double beta, MatrixView& C)
+void m_dgemm(int ngpus, cublasHandle_t* handles, double alpha, const MatrixView* As, const MatrixView* Bs, double beta, MatrixView* Cs)
 {
-    assert(A.nrows == C.nrows);
-    assert(A.ncols == B.nrows);
-    assert(B.ncols == C.ncols);
-
-    A.setreadmostly(ngpus);
-    B.setreadmostly(ngpus);
-
-    int gpu = 0;
-    std::vector<Tile> Ctiles = partitionCols(C);
-    for (auto tile : Ctiles) {
-        auto Ctile = C.subview(tile);
-        
-        auto Atile = A.subview(tile.row, 0, tile.nrows, A.ncols);
-        auto Btile = B.subview(0, tile.col, B.nrows, tile.ncols);
-
-        Ctile.prefetch(streams[gpu], gpu);
-        Atile.prefetch(streams[gpu], gpu);
-        Btile.prefetch(streams[gpu], gpu);
-
+    for (int gpu = 0; gpu < ngpus; gpu++)
+    {
         CUDA_CALL(cudaSetDevice(gpu));
-        dgemm(handles[gpu], alpha, Atile, Btile, beta, Ctile);
-
-        gpu = (gpu+1) % ngpus;
+        dgemm(handles[gpu], alpha, As[gpu], Bs[gpu], beta, Cs[gpu]);
     }
     CUDA_CALL(cudaSetDevice(0));
 }
@@ -119,26 +152,13 @@ void dtrsm(cublasHandle_t handle, cublasSideMode_t side, cublasFillMode_t uplo, 
                 B.data, B.stride);
 }
 
-void m_dtrsm(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, cublasSideMode_t side, cublasFillMode_t uplo, cublasDiagType_t diag,
-             double alpha, const MatrixView& A, MatrixView& B)
+void m_dtrsm(int ngpus, cublasHandle_t* handles, cublasSideMode_t side, cublasFillMode_t uplo, cublasDiagType_t diag,
+             double alpha, const MatrixView* As, MatrixView* Bs)
 {
-    assert(A.nrows == A.ncols);
-    assert(A.nrows == B.nrows);
-
-    A.setreadmostly(ngpus);
-
-    int gpu = 0;
-    auto Btiles = partitionCols(B);
-    for (auto tile : Btiles)
+    for (int gpu = 0; gpu < ngpus; gpu++)
     {
-        auto Btile = B.subview(tile);
-        A.prefetch(streams[gpu], gpu);
-        Btile.prefetch(streams[gpu], gpu);
-
         CUDA_CALL(cudaSetDevice(gpu));
-        dtrsm(handles[gpu], side, uplo, diag, alpha, A, Btile);
-
-        gpu = (gpu+1)%ngpus;
+        dtrsm(handles[gpu], side, uplo, diag, alpha, As[gpu], Bs[gpu]);
     }
     CUDA_CALL(cudaSetDevice(0));
 }
@@ -156,23 +176,16 @@ int dlaswp(cublasHandle_t handle, MatrixView& A, int k1, int k2, const int* ipiv
     return 0;
 }
 
-int m_dlaswp(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, MatrixView& A, int k1, int k2, const int* ipiv, int incx)
+int m_dlaswp(int ngpus, cublasHandle_t* handles, MatrixView* As, int k1, int k2, const int* ipiv, int incx)
 {
     assert(incx == 1);
 
-    if (A.ncols == 0) return 0;
-
-    int gpu = 0;
-    auto Atiles = partitionCols(A);
-    for (auto tile : Atiles)
+    for (int gpu = 0; gpu < ngpus; gpu++)
     {
-        auto Atile = A.subview(tile);
-        Atile.prefetch(streams[gpu], gpu);
-
         CUDA_CALL(cudaSetDevice(gpu));
-        dlaswp(handles[gpu], Atile, k1, k2, ipiv, incx);
-        gpu = (gpu+1)%ngpus;
+        dlaswp(handles[gpu], As[gpu], k1, k2, ipiv, incx);
     }
+    CUDA_CALL(cudaSetDevice(0));
     return 0;
 }
 

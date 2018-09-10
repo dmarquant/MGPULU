@@ -7,7 +7,7 @@
 inline void cudaAssert(cudaError_t code, const char* file, int line) {
     if (code != cudaSuccess) {
         fprintf(stderr, "CUDAError:%s:%d: %s\n", file, line, cudaGetErrorString(code));
-        exit(code);
+        abort();
     }
 }
 
@@ -15,7 +15,7 @@ inline void cudaAssert(cudaError_t code, const char* file, int line) {
 inline void curandAssert(curandStatus_t code, const char* file, int line) {
     if (code != CURAND_STATUS_SUCCESS) {
         fprintf(stderr, "cuRAND Error:%s:%d\n", file, line);
-        exit(code);
+        abort();
     }
 }
 

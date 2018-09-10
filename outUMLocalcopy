@@ -1,0 +1,12 @@
+ngpus=1,matrix_size=8192,time_s=1.746736
+ngpus=2,matrix_size=8192,time_s=1.577223
+ngpus=4,matrix_size=8192,time_s=1.814821
+ngpus=1,matrix_size=16384,time_s=10.832096
+ngpus=2,matrix_size=16384,time_s=7.873929
+ngpus=4,matrix_size=16384,time_s=7.415194
+ngpus=1,matrix_size=24576,time_s=33.707201
+ngpus=2,matrix_size=24576,time_s=22.335147
+ngpus=4,matrix_size=24576,time_s=17.675384
+ngpus=1,matrix_size=32768,time_s=210.678697
+ngpus=2,matrix_size=32768,time_s=48.016174
+ngpus=4,matrix_size=32768,time_s=34.504694
