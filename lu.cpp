@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
 
 #include <cuda_runtime.h>
 #include <curand.h>
@@ -17,7 +18,7 @@ using namespace mblas;
 
 int dgetrf(int m, int n, double* a, int lda, int* ipiv)
 {
-    constexpr int nb = 128;
+    constexpr int nb = 512;
 
     MatrixView A(a, m, n, lda);
 
@@ -30,7 +31,7 @@ int dgetrf(int m, int n, double* a, int lda, int* ipiv)
 
         auto panel = A.subview(j, j, m-j, jb);
 
-        LAPACKE_dgetf2(LAPACK_COL_MAJOR, panel.nrows, panel.ncols, panel.data, panel.stride, &ipiv[j]);
+        LAPACKE_dgetrf(LAPACK_COL_MAJOR, panel.nrows, panel.ncols, panel.data, panel.stride, &ipiv[j]);
 
         auto leftA = A.subview(j, 0, m-j, j);
         auto rightA = A.subview(j, j+jb, m-j, n-j-jb);
@@ -58,11 +59,75 @@ int dgetrf(int m, int n, double* a, int lda, int* ipiv)
     return 0;
 }
 
+int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
+{
+    constexpr int nb = 512;
 
-int main() {
-    int m = 8000;
+    MatrixView A(a, m, n, lda);
+
+    for (int j = 0; j < n; j += nb)
+    {
+        int jb = std::min(nb, n-j);
+
+        auto panel = A.subview(j, j, m-j, jb);
+
+        LAPACKE_dgetrf(LAPACK_COL_MAJOR, panel.nrows, panel.ncols, panel.data, panel.stride, &ipiv[j]);
+
+        auto leftA = A.subview(j, 0, m-j, j);
+        auto rightA = A.subview(j, j+jb, m-j, n-j-jb);
+
+        m_dlaswp(ngpus, streams, handles, leftA, 1, jb, &ipiv[j], 1);
+        m_dlaswp(ngpus, streams, handles, rightA, 1, jb, &ipiv[j], 1);
+
+        for (int i = 0; i < jb; i++)
+            ipiv[j + i] += j;
+        
+        if (n - (j+jb) > 0) {
+            auto tileA = A.subview(j, j, jb, jb);
+            auto U = A.subview(j, j+jb, jb, n - (j+jb));
+            auto L = A.subview(j+jb, j, m - (j+jb), jb);
+            auto restA = A.subview(j+jb, j+jb, m - (j+jb), n - (j+jb));
+
+            m_dtrsm(ngpus, streams, handles, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_DIAG_UNIT, 
+                  1.0, tileA, U);
+            
+            m_dgemm(ngpus, streams, handles, -1.0, L, U, 1.0, restA);
+        }
+        for (int gpu = 0; gpu < ngpus; gpu++)
+        {
+            CUDA_CALL(cudaSetDevice(gpu));
+            CUDA_CALL(cudaDeviceSynchronize());
+        }
+        CUDA_CALL(cudaSetDevice(0));
+    }
+    return 0;
+}
+
+
+int main(int argc, char** argv) {
+    constexpr int TEST_SIZE = 10000;
+
+    int m = 8192;
+    if (argc >= 2)
+        m = std::stoi(argv[1]);
+
     int n = m;
     int lda = m;
+
+    int ngpus;
+    CUDA_CALL(cudaGetDeviceCount(&ngpus));
+
+    cudaStream_t streams[ngpus];
+    cublasHandle_t handles[ngpus];
+
+    for (int gpu = 0; gpu < ngpus; gpu++) {
+        CUDA_CALL(cudaSetDevice(gpu));
+        CUDA_CALL(cudaStreamCreate(&streams[gpu]));
+        cublasCreate(&handles[gpu]);
+        cublasSetStream(handles[gpu], streams[gpu]);
+    }
+    CUDA_CALL(cudaSetDevice(0));
+
 
     double* A;
     double* Acopy;
@@ -84,7 +149,7 @@ int main() {
 
     // Copy A for later reference
     //
-    if (m < 5000)
+    if (m < TEST_SIZE)
     {
         Acopy = (double*)malloc(data_size);
         CUDA_CALL(cudaMemcpy(Acopy, A, data_size, cudaMemcpyDefault));
@@ -96,14 +161,19 @@ int main() {
     
 
     double startTime = get_real_time();
-    dgetrf(m, n, A, m, ipiv);
+#ifdef TEST_CPU
+    LAPACKE_dgetrf(LAPACK_COL_MAJOR, m, n, A, m, ipiv);
+#else
+    //dgetrf(m, n, A, m, ipiv);
+    m_dgetrf(ngpus, streams, handles, m, n, A, m, ipiv);
+#endif
     double endTime = get_real_time();
     
-    printf("matrix_size=%d,time_s=%f\n", n, endTime-startTime);
+    printf("ngpus=%d,matrix_size=%d,time_s=%f\n", ngpus, n, endTime-startTime);
 
     // Extract the solution vector
     //
-    if (m < 5000)
+    if (m < TEST_SIZE)
     {
         double* x = (double*)malloc(sizeof(double) * n);
         CUDA_CALL(cudaMemcpy(x, b, sizeof(double) * n, cudaMemcpyDefault));
