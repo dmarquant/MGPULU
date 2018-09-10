@@ -16,14 +16,11 @@
 
 using namespace mblas;
 
-int dgetrf(int m, int n, double* a, int lda, int* ipiv)
+int dgetrf(cublasHandle_t cublas, int m, int n, double* a, int lda, int* ipiv)
 {
     constexpr int nb = 512;
 
     MatrixView A(a, m, n, lda);
-
-    cublasHandle_t cublas;
-    cublasCreate(&cublas);
 
     for (int j = 0; j < n; j += nb)
     {
@@ -193,8 +190,10 @@ int main(int argc, char** argv) {
 #ifdef TEST_CPU
     LAPACKE_dgetrf(LAPACK_COL_MAJOR, m, n, A, m, ipiv);
 #else
-    //dgetrf(m, n, A, m, ipiv);
-    m_dgetrf(ngpus, streams, handles, m, n, A, m, ipiv);
+    if (ngpus == 1)
+        dgetrf(handles[0], m, n, A, m, ipiv);
+    else
+        m_dgetrf(ngpus, streams, handles, m, n, A, m, ipiv);
 #endif
     double endTime = get_real_time();
     
