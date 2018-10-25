@@ -16,6 +16,8 @@
 
 using namespace mblas;
 
+/// Single GPU implementation of LU decomposition.
+///
 int dgetrf(cublasHandle_t cublas, int m, int n, double* a, int lda, int* ipiv)
 {
     constexpr int nb = 512;
@@ -30,15 +32,15 @@ int dgetrf(cublasHandle_t cublas, int m, int n, double* a, int lda, int* ipiv)
 
         LAPACKE_dgetrf(LAPACK_COL_MAJOR, panel.nrows, panel.ncols, panel.data, panel.stride, &ipiv[j]);
 
-        auto leftA = A.subview(j, 0, m-j, j);
-        auto rightA = A.subview(j, j+jb, m-j, n-j-jb);
-
-        dlaswp(cublas, leftA, 1, jb, &ipiv[j], 1);
-        dlaswp(cublas, rightA, 1, jb, &ipiv[j], 1);
+        auto leftA = A.subview(0, 0, m, j);
+        auto rightA = A.subview(0, j+jb, m, n-j-jb);
 
         for (int i = 0; i < jb; i++)
             ipiv[j + i] += j;
         
+        dlaswp(cublas, leftA, j+1, j+jb, ipiv, 1);
+        dlaswp(cublas, rightA, j+1, j+jb, ipiv, 1);
+
         if (n - (j+jb) > 0) {
             auto tileA = A.subview(j, j, jb, jb);
             auto U = A.subview(j, j+jb, jb, n - (j+jb));
@@ -62,6 +64,10 @@ void sync_all(int ngpus)
         CUDA_CALL(cudaSetDevice(gpu));
 }
 
+
+/// Multi GPU implementation of LU decomposition. The input matrix is split horizontally
+/// among the GPUs. During each iteration the slices are copied local to the GPUs.
+///
 int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
 {
     constexpr int nb = 512;
@@ -90,11 +96,12 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             Lpanel[gpu] = panel.localcopy(0, 0, panel.nrows, panel.ncols, streams[gpu]);
         }
 
-        m_dlaswp(ngpus, handles, leftAcols, 1, jb, &ipiv[j], 1);
-        m_dlaswp(ngpus, handles, rightAcols, 1, jb, &ipiv[j], 1);
-
         for (int i = 0; i < jb; i++)
             ipiv[j + i] += j;
+
+        m_dlaswp(ngpus, handles, leftAcols,  j+1, j+1+jb, ipiv, 1);
+        m_dlaswp(ngpus, handles, rightAcols, j+1, j+1+jb, ipiv, 1);
+
         
         if (n - (j+jb) > 0) {
             MatrixView As[ngpus], Ls[ngpus], restAs[ngpus], Us[ngpus];
