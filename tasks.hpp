@@ -16,6 +16,8 @@ struct Task {
 
     TaskFunc task_func;
     void* user_data;
+
+    const char* name;
 };
 
 struct Event {
@@ -49,8 +51,9 @@ public:
     }
 
     template <typename TaskArgs>
-    int enqueue_task(int device_id, int event_id, TaskFunc task_func, TaskArgs* args) {
+    int enqueue_task(const char* name, int device_id, int event_id, TaskFunc task_func, TaskArgs* args) {
         Task t = {};
+        t.name = name;
         t.task_func = task_func;
 
         // Copy the arguments...
@@ -124,7 +127,17 @@ private:
     void run_task(int device, Task* task) {
         wait_for_event(task->wait_on);
 
+#ifdef DEBUG_TASKS
+        printf("D(%d): Starting task %s\n", device, task->name);
+        fflush(stdout);
+#endif
+
         task->task_func(device, task->user_data);
+
+#ifdef DEBUG_TASKS
+        printf("D(%d): Stop task %s\n", device, task->name);
+        fflush(stdout);
+#endif
 
         pthread_mutex_lock(&events[task->event_id].mutex);
         events[task->event_id].done = true;
@@ -132,15 +145,3 @@ private:
         pthread_mutex_unlock(&events[task->event_id].mutex);
     }
 };
-
-struct SleepArgs {
-    int sec;
-};
-
-void sleep_func(int device, void* p) {
-    SleepArgs* args = (SleepArgs*)p;
-
-    printf("Device(%d): Going to sleep for %d seconds\n", device, args->sec);
-    sleep(args->sec);
-    printf("Device(%d): Slept for %d seconds\n", device, args->sec);
-}

@@ -114,16 +114,16 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
     constexpr int nb = 512;
     MatrixView A(a, m, n, lda);
 
+    GpuTaskScheduler scheduler(ngpus);
+    int next_iteration_event = NULL_EVENT;
+
     for (int j = 0; j < n; j += nb)
     {
-        std::cout << j << std::endl;
         int jb = std::min(nb, n-j);
-
-        GpuTaskScheduler scheduler(ngpus);
 
         auto panel = A.subview(j, j, m-j, jb);
         DgetrfArgs dgetrf_args{panel, &ipiv[j], j};
-        int dgetrf_task = scheduler.enqueue_task(CPU_DEVICE, NULL_EVENT, dgetrf_func, &dgetrf_args);
+        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_iteration_event, dgetrf_func, &dgetrf_args);
 
         auto leftA = A.subview( 0,    0, m, j);
         auto rightA = A.subview(0, j+jb, m, n-j-jb);
@@ -131,9 +131,9 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
         DlaswpArgs left_args{leftA,    ipiv, j+1, j+jb};
         CuDlaswpArgs right_args{handles[0], rightA, ipiv, j+1, j+jb};
 
-        scheduler.enqueue_task(CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
+        scheduler.enqueue_task("dlswp", CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
         //int swp_left_task = scheduler.enqueue_task(0, dgetrf_task, cu_dlaswp_func, &left_args);
-        int swp_right_task = scheduler.enqueue_task(0, dgetrf_task, cu_dlaswp_func, &right_args);
+        int swp_right_task = scheduler.enqueue_task("cudlswp", 0, dgetrf_task, cu_dlaswp_func, &right_args);
 
         if (n - (j+jb) > 0) {
             auto tileA = A.subview(j, j, jb, jb);
@@ -142,18 +142,18 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             auto restA = A.subview(j+jb, j+jb, m - (j+jb), n - (j+jb));
 
             CuDtrsmArgs dtrsm_args{handles[0], tileA, U};
-            int dtrsm_task = scheduler.enqueue_task(0, swp_right_task, cu_dtrsm_func, &dtrsm_args);
+            int dtrsm_task = scheduler.enqueue_task("cudtrsm", 0, swp_right_task, cu_dtrsm_func, &dtrsm_args);
 
 
             CuDgemmArgs dgemm_args{handles[0], L, U, restA};
-            int dgemm_task = scheduler.enqueue_task(0, dtrsm_task, cu_dgemm_func, &dgemm_args);            
+            int dgemm_task = scheduler.enqueue_task("cudgemm", 0, dtrsm_task, cu_dgemm_func, &dgemm_args);            
 
             int dummy = 0;
-            scheduler.enqueue_task(0, dgemm_task, cu_synchronize, &dummy);
+            next_iteration_event = scheduler.enqueue_task("synchronize GPU ", 0, dgemm_task, cu_synchronize, &dummy);
         }
 
-        scheduler.run();    
     }
+    scheduler.run();    
     return 0;
 }
 
