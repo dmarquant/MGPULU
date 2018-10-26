@@ -114,11 +114,9 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
     constexpr int nb = 512;
     MatrixView A(a, m, n, lda);
 
-    cublasHandle_t cublas;
-    cublasCreate(&cublas);
-
     for (int j = 0; j < n; j += nb)
     {
+        std::cout << j << std::endl;
         int jb = std::min(nb, n-j);
 
         GpuTaskScheduler scheduler(ngpus);
@@ -130,11 +128,11 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
         auto leftA = A.subview( 0,    0, m, j);
         auto rightA = A.subview(0, j+jb, m, n-j-jb);
 
-        CuDlaswpArgs left_args{cublas, leftA,    ipiv, j+1, j+jb};
-        CuDlaswpArgs right_args{cublas, rightA, ipiv, j+1, j+jb};
+        DlaswpArgs left_args{leftA,    ipiv, j+1, j+jb};
+        CuDlaswpArgs right_args{handles[0], rightA, ipiv, j+1, j+jb};
 
-        //scheduler.enqueue_task(CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
-        int swp_left_task = scheduler.enqueue_task(0, dgetrf_task, cu_dlaswp_func, &left_args);
+        scheduler.enqueue_task(CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
+        //int swp_left_task = scheduler.enqueue_task(0, dgetrf_task, cu_dlaswp_func, &left_args);
         int swp_right_task = scheduler.enqueue_task(0, dgetrf_task, cu_dlaswp_func, &right_args);
 
         if (n - (j+jb) > 0) {
@@ -143,11 +141,11 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             auto L = A.subview(j+jb, j, m - (j+jb), jb);
             auto restA = A.subview(j+jb, j+jb, m - (j+jb), n - (j+jb));
 
-            CuDtrsmArgs dtrsm_args{cublas, tileA, U};
+            CuDtrsmArgs dtrsm_args{handles[0], tileA, U};
             int dtrsm_task = scheduler.enqueue_task(0, swp_right_task, cu_dtrsm_func, &dtrsm_args);
 
 
-            CuDgemmArgs dgemm_args{cublas, L, U, restA};
+            CuDgemmArgs dgemm_args{handles[0], L, U, restA};
             int dgemm_task = scheduler.enqueue_task(0, dtrsm_task, cu_dgemm_func, &dgemm_args);            
 
             int dummy = 0;
