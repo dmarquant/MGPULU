@@ -20,10 +20,31 @@ struct Task {
     const char* name;
 };
 
-struct Event {
+enum EventType {
+    ET_SIMPLE_EVENT,
+    ET_AGGREGATE_EVENT
+};
+
+struct SimpleEvent {
     bool done = false;
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+};
+
+struct AggregateEvent {
+    int num_events;
+    int* event_list;
+};
+
+struct Event {
+    Event() : type(ET_SIMPLE_EVENT) {}
+
+    EventType type;
+
+    union {
+        SimpleEvent simple;
+        AggregateEvent aggregate;
+    };
 };
 
 struct GpuTaskScheduler;
@@ -44,8 +65,8 @@ public:
     GpuTaskScheduler(int ngpus) {
         gpu_queues.resize(ngpus);
 
-        Event null_event = {};
-        null_event.done = true;
+        Event null_event = {}; null_event.type = ET_SIMPLE_EVENT;
+        null_event.simple.done = true;
 
         events.push_back(null_event);
     }
@@ -71,6 +92,20 @@ public:
             gpu_queues[device_id].push_back(t);
 
         return t.event_id;
+    }
+
+    int aggregate_event(const std::vector<int>& event_list) {
+        Event event;
+        event.type = ET_AGGREGATE_EVENT;
+
+        event.aggregate.num_events = event_list.size();
+        event.aggregate.event_list = (int*)malloc(sizeof(int) * event_list.size());
+
+        for (size_t i = 0; i < event_list.size(); i++)
+            event.aggregate.event_list[i] = event_list[i];
+
+        events.push_back(event);
+        return events.size()-1;
     }
 
     int ngpus() {
@@ -114,14 +149,19 @@ private:
     }
 
     void wait_for_event(int event_id) {
-        if (events[event_id].done)
-            return;
+        if (events[event_id].type == ET_SIMPLE_EVENT) {
+            if (events[event_id].simple.done)
+                return;
 
-        pthread_mutex_lock(&events[event_id].mutex);
-        while (!events[event_id].done) {
-            pthread_cond_wait(&events[event_id].cond, &events[event_id].mutex);
+            pthread_mutex_lock(&events[event_id].simple.mutex);
+            while (!events[event_id].simple.done) {
+                pthread_cond_wait(&events[event_id].simple.cond, &events[event_id].simple.mutex);
+            }
+            pthread_mutex_unlock(&events[event_id].simple.mutex);
+        } else {
+            for (int i = 0; i < events[event_id].aggregate.num_events; i++)
+                wait_for_event(events[event_id].aggregate.event_list[i]);
         }
-        pthread_mutex_unlock(&events[event_id].mutex);
     }
 
     void run_task(int device, Task* task) {
@@ -139,9 +179,11 @@ private:
         fflush(stdout);
 #endif
 
-        pthread_mutex_lock(&events[task->event_id].mutex);
-        events[task->event_id].done = true;
-        pthread_cond_broadcast(&events[task->event_id].cond);
-        pthread_mutex_unlock(&events[task->event_id].mutex);
+        if (events[task->event_id].type == ET_SIMPLE_EVENT) {
+            pthread_mutex_lock(&events[task->event_id].simple.mutex);
+            events[task->event_id].simple.done = true;
+            pthread_cond_broadcast(&events[task->event_id].simple.cond);
+            pthread_mutex_unlock(&events[task->event_id].simple.mutex);
+        }
     }
 };

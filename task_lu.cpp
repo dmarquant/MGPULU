@@ -106,10 +106,7 @@ void cu_synchronize(int device_id, void* p) {
     CUDA_CALL(cudaDeviceSynchronize());
 }
 
-/// Multi GPU implementation of LU decomposition. The input matrix is split horizontally
-/// among the GPUs. During each iteration the slices are copied local to the GPUs.
-///
-int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
+int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
 {
     constexpr int nb = 512;
     MatrixView A(a, m, n, lda);
@@ -150,6 +147,68 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
 
             int dummy = 0;
             next_iteration_event = scheduler.enqueue_task("synchronize GPU ", 0, dgemm_task, cu_synchronize, &dummy);
+        }
+
+    }
+    scheduler.run();    
+    return 0;
+}
+
+int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
+{
+    constexpr int nb = 512;
+    MatrixView A(a, m, n, lda);
+
+    GpuTaskScheduler scheduler(ngpus);
+    int next_iteration_event = NULL_EVENT;
+
+    for (int j = 0; j < n; j += nb)
+    {
+        int jb = std::min(nb, n-j);
+
+        auto panel = A.subview(j, j, m-j, jb);
+        DgetrfArgs dgetrf_args{panel, &ipiv[j], j};
+        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_iteration_event, dgetrf_func, &dgetrf_args);
+
+        auto leftA = A.subview( 0,    0, m, j);
+        auto rightA = A.subview(0, j+jb, m, n-j-jb);
+
+        DlaswpArgs left_args{leftA,    ipiv, j+1, j+jb};
+
+        scheduler.enqueue_task("dlswp", CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
+        //int swp_left_task = scheduler.enqueue_task(0, dgetrf_task, cu_dlaswp_func, &left_args);
+
+        std::vector<int> sync_events(ngpus);
+
+        if (n - (j+jb) > 0) {
+            auto tileA = A.subview(j, j, jb, jb);
+            auto U = A.subview(j, j+jb, jb, n - (j+jb));
+            auto L = A.subview(j+jb, j, m - (j+jb), jb);
+            auto restA = A.subview(j+jb, j+jb, m - (j+jb), n - (j+jb));
+
+            auto rightAcolsTiles = partitionCols(rightA, ngpus);
+            auto UTiles = partitionCols(U, ngpus);
+            auto ATiles = partitionCols(restA, ngpus);
+            for (int i = 0; i < ngpus; i++) {
+                CuDlaswpArgs right_args{handles[0], A.subview(rightAcolsTiles[i]), ipiv, j+1, j+jb};
+                int swp_right_task = scheduler.enqueue_task("cudlswp", 0, dgetrf_task, 
+                                                            cu_dlaswp_func, &right_args);
+
+                CuDtrsmArgs dtrsm_args{handles[0], tileA, A.subview(UTiles[i])};
+                int dtrsm_task = scheduler.enqueue_task("cudtrsm", 0, swp_right_task,
+                                                        cu_dtrsm_func, &dtrsm_args);
+
+                CuDgemmArgs dgemm_args{handles[0], L, A.subview(UTiles[i]), A.subview(ATiles[i])};
+                int dgemm_task = scheduler.enqueue_task("cudgemm", 0, dtrsm_task, 
+                                                        cu_dgemm_func, &dgemm_args);            
+                int dummy = 0;
+                int synchronize_task = scheduler.enqueue_task("synchronize GPU ", 0, dgemm_task, 
+                                                              cu_synchronize, &dummy);
+
+                sync_events[i] = synchronize_task;
+            }
+
+            next_iteration_event = scheduler.aggregate_event(sync_events);
         }
 
     }

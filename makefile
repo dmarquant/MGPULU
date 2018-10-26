@@ -1,5 +1,5 @@
 INCLUDES=-I${CUDAHOME}/include -I${HOME}/openblas/include
-LIBS=-L${CUDAHOME}/lib64 -L${HOME}/openblas/lib -lcudart -lcublas -lcurand -lpthread -lopenblas
+LIBS=-L${CUDAHOME}/lib64 -L${HOME}/openblas/lib -lcudart -lcublas -lcurand -lpthread -lmkl_rt
 
 
 
