@@ -65,7 +65,8 @@ public:
     GpuTaskScheduler(int ngpus) {
         gpu_queues.resize(ngpus);
 
-        Event null_event = {}; null_event.type = ET_SIMPLE_EVENT;
+        Event null_event = {}; 
+        null_event.type = ET_SIMPLE_EVENT;
         null_event.simple.done = true;
 
         events.push_back(null_event);
@@ -83,7 +84,13 @@ public:
 
         t.wait_on = event_id;
 
-        events.emplace_back();
+        Event event;
+        event.type = ET_SIMPLE_EVENT;
+        event.simple.done = false;
+        event.simple.mutex = PTHREAD_MUTEX_INITIALIZER;
+        event.simple.cond  = PTHREAD_COND_INITIALIZER;
+
+        events.push_back(event);
         t.event_id = events.size() - 1;
 
         if (device_id == -1)

@@ -190,19 +190,21 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             auto UTiles = partitionCols(U, ngpus);
             auto ATiles = partitionCols(restA, ngpus);
             for (int i = 0; i < ngpus; i++) {
-                CuDlaswpArgs right_args{handles[0], A.subview(rightAcolsTiles[i]), ipiv, j+1, j+jb};
-                int swp_right_task = scheduler.enqueue_task("cudlswp", 0, dgetrf_task, 
+                //printf("rightAcolsTiles (%d, %d)\n", rightAcolsTiles[i].col, rightAcolsTiles[i].ncols);
+
+                CuDlaswpArgs right_args{handles[i], rightA.subview(rightAcolsTiles[i]), ipiv, j+1, j+jb};
+                int swp_right_task = scheduler.enqueue_task("cudlswp", i, dgetrf_task, 
                                                             cu_dlaswp_func, &right_args);
 
-                CuDtrsmArgs dtrsm_args{handles[0], tileA, A.subview(UTiles[i])};
-                int dtrsm_task = scheduler.enqueue_task("cudtrsm", 0, swp_right_task,
+                CuDtrsmArgs dtrsm_args{handles[i], tileA, U.subview(UTiles[i])};
+                int dtrsm_task = scheduler.enqueue_task("cudtrsm", i, swp_right_task,
                                                         cu_dtrsm_func, &dtrsm_args);
 
-                CuDgemmArgs dgemm_args{handles[0], L, A.subview(UTiles[i]), A.subview(ATiles[i])};
-                int dgemm_task = scheduler.enqueue_task("cudgemm", 0, dtrsm_task, 
+                CuDgemmArgs dgemm_args{handles[i], L, U.subview(UTiles[i]), restA.subview(ATiles[i])};
+                int dgemm_task = scheduler.enqueue_task("cudgemm", i, dtrsm_task, 
                                                         cu_dgemm_func, &dgemm_args);            
                 int dummy = 0;
-                int synchronize_task = scheduler.enqueue_task("synchronize GPU ", 0, dgemm_task, 
+                int synchronize_task = scheduler.enqueue_task("synchronize GPU ", i, dgemm_task, 
                                                               cu_synchronize, &dummy);
 
                 sync_events[i] = synchronize_task;
@@ -212,6 +214,7 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
         }
 
     }
+
     scheduler.run();    
     return 0;
 }
