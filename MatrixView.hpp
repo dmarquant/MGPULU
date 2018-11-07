@@ -189,6 +189,20 @@ int dlaswp(cublasHandle_t handle, MatrixView& A, int k1, int k2, const int* ipiv
     return 0;
 }
 
+int dlaswp(cublasHandle_t handle, int off, MatrixView& A, int k1, int k2, const int* ipiv, int incx)
+{
+    assert(incx == 1);
+
+    if (A.ncols == 0) return 0;
+
+    for (int i = k1-1; i < k2; i++)
+    {
+        cublasDswap(handle, A.ncols, &A.data[i-off], A.stride, &A.data[ipiv[i]-1-off], A.stride);
+        CUDA_CALL(cudaDeviceSynchronize());
+    }
+    return 0;
+}
+
 int m_dlaswp(int ngpus, cublasHandle_t* handles, MatrixView* As, int k1, int k2, const int* ipiv, int incx)
 {
     assert(incx == 1);

@@ -49,6 +49,7 @@ struct DlaswpArgs {
 
 struct CuDlaswpArgs {
     cublasHandle_t cublas;
+    int j;
     MatrixView* A;
     int* ipiv;
     int k1, k2;
@@ -65,7 +66,8 @@ void cu_dlaswp_func(int device_id, void* p) {
     CuDlaswpArgs* args = static_cast<CuDlaswpArgs*>(p);
 
     CUDA_CALL(cudaSetDevice(device_id));
-    mblas::dlaswp(args->cublas, *args->A, args->k1, args->k2, args->ipiv, 1);
+    mblas::dlaswp(args->cublas, args->j, *args->A, args->k1, args->k2, args->ipiv, 1);
+    CUDA_CALL(cudaDeviceSynchronize());
 }
 
 struct CuDtrsmArgs {
@@ -80,6 +82,7 @@ void cu_dtrsm_func(int device_id, void* p) {
     CUDA_CALL(cudaSetDevice(device_id));
     mblas::dtrsm(args->cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_DIAG_UNIT, 
                  1.0, *args->A, *args->B);
+    CUDA_CALL(cudaDeviceSynchronize());
 }
 
 struct CuDgemmArgs {
@@ -94,6 +97,7 @@ void cu_dgemm_func(int device_id, void* p) {
 
     CUDA_CALL(cudaSetDevice(device_id));    
     mblas::dgemm(args->cublas, -1.0, *args->A, *args->B, 1.0, *args->C);
+    CUDA_CALL(cudaDeviceSynchronize());
 }
 
 void cu_synchronize(int device_id, void* p) {
@@ -171,7 +175,7 @@ void copy_a11_l_func(int device, void* p) {
     *args->A11_L = A->localcopy(j, j, A->nrows-j, jb, args->stream);
 
     *args->A11 = args->A11_L->subview(0, 0, jb, jb);
-    *args->L   = args->A11_L->subview(jb, 0, args->A11_L->nrows, jb);
+    *args->L   = args->A11_L->subview(jb, 0, args->A11_L->nrows-jb, jb);
 }
 
 struct Copy_Back_Args {
@@ -249,7 +253,7 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             copy_a11_l_tasks[gpu] = scheduler.enqueue_task("copy_A11_L", gpu, dgetrf_task, copy_a11_l_func, &copy_a11_l_args);
 
             int wait_to_swap = scheduler.aggregate_event({dgetrf_task, copy_u_a22_tasks[gpu]});
-            CuDlaswpArgs swap_right_args{handles[gpu], U_A22[gpu], ipiv, j+1, j+jb};
+            CuDlaswpArgs swap_right_args{handles[gpu], j, U_A22[gpu], ipiv, j+1, j+jb};
             int cudlaswp_task = scheduler.enqueue_task("cudlaswp", gpu, wait_to_swap, cu_dlaswp_func, &swap_right_args);
 
             CuDtrsmArgs dtrsm_args{handles[gpu], A11[gpu], U[gpu]};
