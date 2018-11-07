@@ -8,6 +8,9 @@
 
 #include <unistd.h>
 
+constexpr int CPU_DEVICE = -1;
+constexpr int NULL_EVENT = 0;
+
 typedef void (*TaskFunc) (int, void*);
 
 struct Task {

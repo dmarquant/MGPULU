@@ -72,6 +72,19 @@ public:
         return mv;
     }
 
+    MatrixView localcopy(int row, int col, int nrows, int ncols)
+    {
+        MatrixView mv{NULL, nrows, ncols, nrows};
+        if (nrows * ncols != 0)
+        {
+            CUDA_CALL(cudaMalloc(&mv.data, sizeof(double) * nrows * ncols));
+            CUDA_CALL(cudaMemcpy2D(mv.data, sizeof(double) * nrows, 
+                                   this->data + row + col * this->stride, sizeof(double) * this->stride,
+                                    nrows * sizeof(double), ncols, cudaMemcpyDefault));
+        }
+        return mv;
+    }
+
     MatrixView localcopy(Tile t, cudaStream_t stream)
     {
         return localcopy(t.row, t.col, t.nrows, t.ncols, stream);
