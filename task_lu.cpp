@@ -194,6 +194,9 @@ struct Copy_Back_Args {
     // This is locally allocated memory
     MatrixView* U_A22;
 
+    // Doesn't get copied but is freed
+    MatrixView* A11_L;
+
     cudaStream_t stream;
 };
 
@@ -204,6 +207,9 @@ void copy_back_func(int device, void* p) {
 
     CUDA_CALL(cudaSetDevice(device));
     A->copyback(j, args->col_begin, *args->U_A22, args->stream);
+
+    args->U_A22->free();
+    args->A11_L->free();
 }
 
 int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
@@ -262,7 +268,7 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             CuDgemmArgs dgemm_args{handles[gpu], L[gpu], U[gpu], A22[gpu]};
             int cudgemm_task = scheduler.enqueue_task("cudgemm", gpu, cudtrsm_task, cu_dgemm_func, &dgemm_args);
 
-            Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, U_A22[gpu]};
+            Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, U_A22[gpu], A11_L[gpu]};
             copy_back_tasks[gpu] = scheduler.enqueue_task("copy_back", gpu, cudgemm_task, copy_back_func, &copy_back_args);
 
             int dummy = 0;

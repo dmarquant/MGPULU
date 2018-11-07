@@ -96,11 +96,11 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
             Lpanel[gpu] = panel.localcopy(0, 0, panel.nrows, panel.ncols, streams[gpu]);
         }
 
+        m_dlaswp(ngpus, handles, leftAcols,  1, jb, &ipiv[j], 1);
+        m_dlaswp(ngpus, handles, rightAcols, 1, jb, &ipiv[j], 1);
+
         for (int i = 0; i < jb; i++)
             ipiv[j + i] += j;
-
-        m_dlaswp(ngpus, handles, leftAcols,  j+1, j+1+jb, ipiv, 1);
-        m_dlaswp(ngpus, handles, rightAcols, j+1, j+1+jb, ipiv, 1);
 
         
         if (n - (j+jb) > 0) {
