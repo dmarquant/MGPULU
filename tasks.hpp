@@ -40,7 +40,10 @@ struct AggregateEvent {
 };
 
 struct Event {
-    Event() : type(ET_SIMPLE_EVENT) {}
+    Event() : type(ET_SIMPLE_EVENT) {
+        pthread_mutex_init(&simple.mutex, NULL);
+        pthread_cond_init(&simple.cond, NULL);
+    }
 
     EventType type;
 
@@ -158,7 +161,11 @@ private:
 
             pthread_mutex_lock(&events[event_id].simple.mutex);
             while (!events[event_id].simple.done) {
+                if (event_id < 10)
+                    printf("Waiting for event: %d, cond: %p\n", event_id, &events[event_id].simple.cond);
                 pthread_cond_wait(&events[event_id].simple.cond, &events[event_id].simple.mutex);
+                if (event_id < 10)
+                    printf("Wokeup for event: %d, cond: %p\n", event_id, &events[event_id].simple.cond);
             }
             pthread_mutex_unlock(&events[event_id].simple.mutex);
         } else {
@@ -186,6 +193,7 @@ private:
             pthread_mutex_lock(&events[task->event_id].simple.mutex);
             events[task->event_id].simple.done = true;
             pthread_cond_broadcast(&events[task->event_id].simple.cond);
+            printf("Broadcasting event: %d, cond: %p\n", task->event_id, &events[task->event_id].simple.cond);
             pthread_mutex_unlock(&events[task->event_id].simple.mutex);
         }
     }

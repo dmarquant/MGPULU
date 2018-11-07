@@ -14,14 +14,14 @@ std::vector<Range> partition(int begin, int end, int n) {
     int rest = (end - begin) % n;
 
     for (int i = 0; i < n; i++) {
-        subrange[i].begin = begin;
+        subranges[i].begin = begin;
         begin += step;
 
         // Account for uneven division of the range by n
         if (i < rest)
             begin++;
 
-        subrange[i].end = begin;
+        subranges[i].end = begin;
     }
     return subranges;
 }

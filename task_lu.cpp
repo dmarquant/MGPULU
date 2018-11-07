@@ -196,11 +196,10 @@ struct Copy_Back_Args {
 void copy_back_func(int device, void* p) {
     Copy_Back_Args* args = static_cast<Copy_Back_Args*>(p);
     int j = args->j;
-    int jb = args->jb;
     MatrixView* A = args->A;
 
     CUDA_CALL(cudaSetDevice(device));
-    A->copyback(j, args->col_begin, args->U_A22, args->stream);
+    A->copyback(j, args->col_begin, *args->U_A22, args->stream);
 }
 
 int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
@@ -240,30 +239,30 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
 
             Copy_U_A22_Args copy_u_a22_args{j, jb, &A, 
                                             colranges[gpu].begin, colranges[gpu].end, 
-                                            &U_A22[gpu], &U[gpu], &A22[gpu], streams[gpu]};
+                                            U_A22[gpu], U[gpu], A22[gpu], streams[gpu]};
             copy_u_a22_tasks[gpu] = scheduler.enqueue_task("copy_U_A22", gpu, next_iteration_event, copy_u_a22_func, &copy_u_a22_args);
 
             A11_L[gpu] = new MatrixView;
             A11[gpu]   = new MatrixView;
             L[gpu]     = new MatrixView;
-            CopyA11_LArgs copy_a11_l_args{j, jb, &A, &A11_L[gpu], &A11[gpu], &L[gpu], streams[gpu]};
+            Copy_A11_L_Args copy_a11_l_args{j, jb, &A, A11_L[gpu], A11[gpu], L[gpu], streams[gpu]};
             copy_a11_l_tasks[gpu] = scheduler.enqueue_task("copy_A11_L", gpu, dgetrf_task, copy_a11_l_func, &copy_a11_l_args);
 
             int wait_to_swap = scheduler.aggregate_event({dgetrf_task, copy_u_a22_tasks[gpu]});
-            CuDlaswpArgs swap_right_args{handles[gpu], &U_A22[gpu], &ipiv, j+1, j+jb};
-            int cudlaswp_task = scheduler.enqueue_task("cudlaswp", gpu, wait_to_swap, cudlaswp_func, &swap_right_args);
+            CuDlaswpArgs swap_right_args{handles[gpu], U_A22[gpu], ipiv, j+1, j+jb};
+            int cudlaswp_task = scheduler.enqueue_task("cudlaswp", gpu, wait_to_swap, cu_dlaswp_func, &swap_right_args);
 
-            DtrsmArgs dtrsm_args{handles[gpu], &A11[gpu], &U[gpu]};
-            int cudtrsm_task = scheduler.enqueue_task("cudtrsm", gpu, cudlaswp_task, cudtrsm_func, &dtrsm_args);
+            CuDtrsmArgs dtrsm_args{handles[gpu], A11[gpu], U[gpu]};
+            int cudtrsm_task = scheduler.enqueue_task("cudtrsm", gpu, cudlaswp_task, cu_dtrsm_func, &dtrsm_args);
 
-            DgemmArgs dgemm_args{handles[gpu], &L[gpu], &U[gpu], &A22[gpu]};
-            int cudgemm_task = scheduler.enqueue_task("cudgemm", gpu, cudtrsm_task, cudgemm_func, &dgemm_args);
+            CuDgemmArgs dgemm_args{handles[gpu], L[gpu], U[gpu], A22[gpu]};
+            int cudgemm_task = scheduler.enqueue_task("cudgemm", gpu, cudtrsm_task, cu_dgemm_func, &dgemm_args);
 
-            Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, &U_A22[gpu]};
-            copy_back_tasks[gpu] = scheduler.enqueue_task("copy_back", gpu, ..., copy_back_func, &copy_back_args);
+            Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, U_A22[gpu]};
+            copy_back_tasks[gpu] = scheduler.enqueue_task("copy_back", gpu, cudgemm_task, copy_back_func, &copy_back_args);
 
             int dummy = 0;
-            sync_events[gpu] = scheduler.enqueue_task("synchronize GPU ", 0, copy_back_task[gpu], 
+            sync_events[gpu] = scheduler.enqueue_task("synchronize GPU ", 0, copy_back_tasks[gpu], 
                                                           cu_synchronize, &dummy);
         }
     
@@ -273,8 +272,8 @@ int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, i
     }
 
     scheduler.run();
+    return 0;
 }
-
 
 
 int main(int argc, char** argv) {
