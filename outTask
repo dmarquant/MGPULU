@@ -1,0 +1,14 @@
+ngpus=2,matrix_size=8192,time_s=1.984715
+ngpus=4,matrix_size=8192,time_s=2.502341
+ngpus=2,matrix_size=16384,time_s=8.356491
+ngpus=4,matrix_size=16384,time_s=8.821321
+ngpus=2,matrix_size=24576,time_s=22.215416
+ngpus=4,matrix_size=24576,time_s=20.034193
+ngpus=2,matrix_size=32768,time_s=49.361972
+ngpus=4,matrix_size=32768,time_s=39.079225
+ngpus=2,matrix_size=40960,time_s=146.151931
+ngpus=4,matrix_size=40960,time_s=64.833952
+CUDAError:MatrixView.hpp:66: an illegal memory access was encountered
+/var/spool/slurmd/job09638/slurm_script: line 4: 25214 Aborted                 CUDA_VISIBLE_DEVICES=0,1 ./task_lu $(( $i * 8192 ))
+CUDAError:MatrixView.hpp:66: an illegal memory access was encountered
+/var/spool/slurmd/job09638/slurm_script: line 4: 25269 Aborted                 CUDA_VISIBLE_DEVICES=0,1,2,3 ./task_lu $(( $i * 8192 ))
