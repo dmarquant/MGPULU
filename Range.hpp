@@ -25,3 +25,25 @@ std::vector<Range> partition(int begin, int end, int n) {
     }
     return subranges;
 }
+
+std::vector<Range> partition_min(int begin, int end, int n, int min_size) {
+    std::vector<Range> subranges;
+    subranges.reserve(n);
+
+    int step = std::max((end - begin) / n, std::min(end-begin, min_size));
+
+    Range r;
+    r.begin = begin;
+    while (r.begin + step < end) {
+        r.end = r.begin + step;
+
+        subranges.push_back(r);
+
+        r.begin = r.end;
+    }
+
+    r.end = end;
+    subranges.push_back(r);
+
+    return subranges;
+}
