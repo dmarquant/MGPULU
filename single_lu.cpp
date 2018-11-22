@@ -24,7 +24,10 @@ cublasStatus_t cublasDlaswp(cublasHandle_t handle,
     if (n == 0) return CUBLAS_STATUS_SUCCESS;
 
     for (int i = k1-1; i < k2; i++) {
-        cublasDswap(handle, n, &a[i], lda, &a[ipiv[i]-1], lda);
+        cublasStatus_t err = cublasDswap(handle, n, &a[i], lda, &a[ipiv[i]-1], lda);
+
+        if (err != CUBLAS_STATUS_SUCCESS)
+            return err;
     }
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -47,29 +50,29 @@ int dgetrf(cublasHandle_t cublas, int m, int n, double* a, int lda, int* ipiv) {
             ipiv[j + i] += j;
 
         // Apply row swaps to left and right of the matrix
-        cublasDlaswp(cublas, m-j, j,         a,             lda, j+1, j+jb, ipiv, 1);
-        cublasDlaswp(cublas, m-j, n-(j+jb), &a[(j+jb)*lda], lda, j+1, j+jb, ipiv, 1);
+        CUBLAS_CALL(cublasDlaswp(cublas, m-j, j,         a,             lda, j+1, j+jb, ipiv, 1));
+        CUBLAS_CALL(cublasDlaswp(cublas, m-j, n-(j+jb), &a[(j+jb)*lda], lda, j+1, j+jb, ipiv, 1));
 
         if (n - (j+jb) > 0) {
             double ONE = 1.0;
             double MINUS_ONE = -1.0;
 
             // Update U
-            cublasDtrsm(cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, 
-                        CUBLAS_OP_N, CUBLAS_DIAG_UNIT,
-                        jb, n-(j+jb),
-                        &ONE,
-                        &a[j + j*lda], lda,
-                        &a[j + (j+jb)*lda], lda);
+            CUBLAS_CALL(cublasDtrsm(cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, 
+                                    CUBLAS_OP_N, CUBLAS_DIAG_UNIT,
+                                    jb, n-(j+jb),
+                                    &ONE,
+                                    &a[j + j*lda], lda,
+                                    &a[j + (j+jb)*lda], lda));
 
             // Update rest of A
-            cublasDgemm(cublas, CUBLAS_OP_N, CUBLAS_OP_N,
-                        m-(j+jb), n-(j+jb), jb,
-                        &MINUS_ONE,
-                        &a[j+jb + j*lda], lda,
-                        &a[j + (j+jb)*lda], lda,
-                        &ONE,
-                        &a[j+jb + (j+jb)*lda], lda);
+            CUBLAS_CALL(cublasDgemm(cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                                    m-(j+jb), n-(j+jb), jb,
+                                    &MINUS_ONE,
+                                    &a[j+jb + j*lda], lda,
+                                    &a[j + (j+jb)*lda], lda,
+                                    &ONE,
+                                    &a[j+jb + (j+jb)*lda], lda));
 
             CUDA_CALL(cudaDeviceSynchronize());
         }
@@ -87,15 +90,12 @@ int main(int argc, char** argv) {
     int n = m;
     int lda = m;
 
-    int ngpus;
-    CUDA_CALL(cudaGetDeviceCount(&ngpus));
-
     cudaStream_t stream;
     cublasHandle_t handle;
 
     CUDA_CALL(cudaStreamCreate(&stream));
-    cublasCreate(&handle);
-    cublasSetStream(handle, stream);
+    CUBLAS_CALL(cublasCreate(&handle));
+    CUBLAS_CALL(cublasSetStream(handle, stream));
 
     double* A;
     double* Acopy = nullptr;

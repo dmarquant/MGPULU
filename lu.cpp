@@ -14,49 +14,9 @@
 
 #include "MatrixView.hpp"
 
+#include "cublasDlaswp.h"
+
 using namespace mblas;
-
-/// Single GPU implementation of LU decomposition.
-///
-int dgetrf(cublasHandle_t cublas, int m, int n, double* a, int lda, int* ipiv)
-{
-    constexpr int nb = 512;
-
-    MatrixView A(a, m, n, lda);
-
-    for (int j = 0; j < n; j += nb)
-    {
-        int jb = std::min(nb, n-j);
-
-        auto panel = A.subview(j, j, m-j, jb);
-
-        LAPACKE_dgetrf(LAPACK_COL_MAJOR, panel.nrows, panel.ncols, panel.data, panel.stride, &ipiv[j]);
-
-        auto leftA = A.subview(0, 0, m, j);
-        auto rightA = A.subview(0, j+jb, m, n-j-jb);
-
-        for (int i = 0; i < jb; i++)
-            ipiv[j + i] += j;
-        
-        dlaswp(cublas, leftA, j+1, j+jb, ipiv, 1);
-        dlaswp(cublas, rightA, j+1, j+jb, ipiv, 1);
-
-        if (n - (j+jb) > 0) {
-            auto tileA = A.subview(j, j, jb, jb);
-            auto U = A.subview(j, j+jb, jb, n - (j+jb));
-            auto L = A.subview(j+jb, j, m - (j+jb), jb);
-            auto restA = A.subview(j+jb, j+jb, m - (j+jb), n - (j+jb));
-
-            dtrsm(cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_DIAG_UNIT, 
-                  1.0, tileA, U);
-            
-            dgemm(cublas, -1.0, L, U, 1.0, restA);
-
-            cudaDeviceSynchronize();
-        }
-    }
-    return 0;
-}
 
 void sync_all(int ngpus)
 {
@@ -68,7 +28,7 @@ void sync_all(int ngpus)
 /// Multi GPU implementation of LU decomposition. The input matrix is split horizontally
 /// among the GPUs. During each iteration the slices are copied local to the GPUs.
 ///
-int m_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
+int loopfusion_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
 {
     constexpr int nb = 512;
 
@@ -156,8 +116,8 @@ int main(int argc, char** argv) {
     for (int gpu = 0; gpu < ngpus; gpu++) {
         CUDA_CALL(cudaSetDevice(gpu));
         CUDA_CALL(cudaStreamCreate(&streams[gpu]));
-        cublasCreate(&handles[gpu]);
-        cublasSetStream(handles[gpu], streams[gpu]);
+        CUBLAS_CALL(cublasCreate(&handles[gpu]));
+        CUBLAS_CALL(cublasSetStream(handles[gpu], streams[gpu]));
     }
     CUDA_CALL(cudaSetDevice(0));
 
@@ -194,14 +154,7 @@ int main(int argc, char** argv) {
     
 
     double startTime = get_real_time();
-#ifdef TEST_CPU
-    LAPACKE_dgetrf(LAPACK_COL_MAJOR, m, n, A, m, ipiv);
-#else
-    if (ngpus == 1)
-        dgetrf(handles[0], m, n, A, m, ipiv);
-    else
-        m_dgetrf(ngpus, streams, handles, m, n, A, m, ipiv);
-#endif
+    loopfusion_dgetrf(ngpus, streams, handles, m, n, A, m, ipiv);
     double endTime = get_real_time();
     
     printf("ngpus=%d,matrix_size=%d,time_s=%f\n", ngpus, n, endTime-startTime);

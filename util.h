@@ -1,4 +1,10 @@
 #pragma once
+#include <cstdio>
+#include <cstdlib>
+
+#include <cuda_runtime.h>
+#include <curand.h>
+#include <cublas_v2.h>
 
 #include <time.h>
 
@@ -15,6 +21,14 @@ inline void cudaAssert(cudaError_t code, const char* file, int line) {
 inline void curandAssert(curandStatus_t code, const char* file, int line) {
     if (code != CURAND_STATUS_SUCCESS) {
         fprintf(stderr, "cuRAND Error:%s:%d\n", file, line);
+        abort();
+    }
+}
+
+#define CUBLAS_CALL(call) { cublasAssert((call), __FILE__, __LINE__); }
+inline void cublasAssert(cublasStatus_t code, const char* file, int line) {
+    if (code != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "cublas Error:%s:%d\n", file, line);
         abort();
     }
 }
