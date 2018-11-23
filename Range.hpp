@@ -1,10 +1,14 @@
 #pragma once
+#include <cassert>
 #include <vector>
 
 struct Range {
     int begin, end;
 
-    int size() { return end - begin; }
+    int size() { 
+        assert(end >= begin);
+        return end - begin; 
+    }
 };
 
 // Partition the range [begin, end) into 'n' equally sized parts.
@@ -36,8 +40,8 @@ std::vector<Range> partition_min(int begin, int end, int n, int min_size) {
 
     Range r;
     r.begin = begin;
-    while (r.begin + step < end) {
-        r.end = r.begin + step;
+    for (int i = 0; i < n; i++) {
+        r.end = std::min(r.begin + step, end);
 
         subranges.push_back(r);
 

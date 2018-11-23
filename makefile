@@ -12,4 +12,4 @@ lu: lu.cpp $(HEADERS)
 	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS)
 
 task_lu: task_lu.cpp $(HEADERS)
-	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS)
+	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) #-DDEBUG_TASKS

@@ -221,6 +221,9 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
     // Event to wait on before starting the next iteration
     int next_iteration_event = NULL_EVENT;
 
+    // The next dgetrf call can already start while some GPUs are still working
+    int next_dgetrf_event = NULL_EVENT;
+
     for (int j = 0; j < n; j += nb) {
 
         // The actual block size for this iteration (may be smaller at the edge)
@@ -229,7 +232,7 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         // Do partial LU decomposition
         MatrixView* panel = new MatrixView(A.subview(j, j, m-j, jb));
         DgetrfArgs dgetrf_args{panel, &ipiv[j], j};
-        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_iteration_event, dgetrf_func, &dgetrf_args);
+        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_dgetrf_event, dgetrf_func, &dgetrf_args);
 
         // Apply row swaps left of the panel
         MatrixView* leftA = new MatrixView(A.subview(0, 0, m, j));
@@ -237,14 +240,17 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         int swap_left_task = scheduler.enqueue_task("dlaswp", CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
 
         std::vector<int> sync_events(ngpus);
-        std::vector<Range> colranges = partition(j+jb, A.ncols, ngpus);
-        for (int gpu = 0; gpu < ngpus; gpu++) {
+
+        Range start{j+jb, std::min(j+jb+nb, A.ncols)};
+        if (start.size() != 0) {
+            int gpu = 0;
+
             MatrixView* U_A22 = new MatrixView;
             MatrixView* U     = new MatrixView;
             MatrixView* A22   = new MatrixView;
 
             Copy_U_A22_Args copy_u_a22_args{j, jb, &A, 
-                                            colranges[gpu].begin, colranges[gpu].end, 
+                                            start.begin, start.end, 
                                             U_A22, U, A22, streams[gpu]};
             scheduler.enqueue_task("copy_U_A22", gpu, next_iteration_event, copy_u_a22_func, &copy_u_a22_args);
 
@@ -263,12 +269,48 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
             CuDgemmArgs dgemm_args{handles[gpu], L, U, A22};
             scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cu_dgemm_func, &dgemm_args);
 
-            Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, U_A22, A11_L};
+            Copy_Back_Args copy_back_args{j, jb, &A, start.begin, start.end, U_A22, A11_L};
             scheduler.enqueue_task("copy_back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
 
             int dummy = 0;
             int sync_task = scheduler.enqueue_task("synchronize GPU ", 0, NULL_EVENT, cu_synchronize, &dummy);
-            sync_events.push_back(sync_task);
+            next_dgetrf_event = sync_task;
+        }
+        std::vector<Range> colranges = partition_min(j+jb, A.ncols, ngpus, jb);
+        colranges[0].begin = std::min(colranges[0].begin + jb, colranges[0].end);
+        for (int gpu = 0; gpu < ngpus; gpu++) {
+            if (colranges[gpu].size() != 0) {
+                MatrixView* U_A22 = new MatrixView;
+                MatrixView* U     = new MatrixView;
+                MatrixView* A22   = new MatrixView;
+
+                Copy_U_A22_Args copy_u_a22_args{j, jb, &A, 
+                                                colranges[gpu].begin, colranges[gpu].end, 
+                                                U_A22, U, A22, streams[gpu]};
+                scheduler.enqueue_task("copy_U_A22", gpu, next_iteration_event, copy_u_a22_func, &copy_u_a22_args);
+
+                MatrixView* A11_L = new MatrixView;
+                MatrixView* A11   = new MatrixView;
+                MatrixView* L     = new MatrixView;
+                Copy_A11_L_Args copy_a11_l_args{j, jb, &A, A11_L, A11, L, streams[gpu]};
+                scheduler.enqueue_task("copy_A11_L", gpu, dgetrf_task, copy_a11_l_func, &copy_a11_l_args);
+
+                CuDlaswpArgs swap_right_args{handles[gpu], j, U_A22, ipiv, j+1, j+jb};
+                scheduler.enqueue_task("cudlaswp", gpu, NULL_EVENT, cu_dlaswp_func, &swap_right_args);
+
+                CuDtrsmArgs dtrsm_args{handles[gpu], A11, U};
+                scheduler.enqueue_task("cudtrsm", gpu, NULL_EVENT, cu_dtrsm_func, &dtrsm_args);
+
+                CuDgemmArgs dgemm_args{handles[gpu], L, U, A22};
+                scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cu_dgemm_func, &dgemm_args);
+
+                Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, U_A22, A11_L};
+                scheduler.enqueue_task("copy_back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
+
+                int dummy = 0;
+                int sync_task = scheduler.enqueue_task("synchronize GPU ", 0, NULL_EVENT, cu_synchronize, &dummy);
+                sync_events.push_back(sync_task);
+            }
         }
 
         sync_events.push_back(swap_left_task);
