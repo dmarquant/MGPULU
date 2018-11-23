@@ -153,6 +153,9 @@ private:
             scheduler->run_task(device_id, t);
         }
 
+        CUDA_CALL(cudaSetDevice(device_id));
+        CUDA_CALL(cudaDeviceSynchronize());
+
         return nullptr;
     }
 

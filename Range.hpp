@@ -3,6 +3,8 @@
 
 struct Range {
     int begin, end;
+
+    int size() { return end - begin; }
 };
 
 // Partition the range [begin, end) into 'n' equally sized parts.

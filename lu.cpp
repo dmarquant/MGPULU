@@ -10,18 +10,41 @@
 #include <cblas.h>
 #include <lapacke.h>
 
+#include "Range.hpp"
 #include "util.h"
-
-#include "MatrixView.hpp"
-
-#include "cublasDlaswp.h"
-
-using namespace mblas;
 
 void sync_all(int ngpus)
 {
-    for (int gpu = 0; gpu < ngpus; gpu++)
+    for (int gpu = 0; gpu < ngpus; gpu++) {
         CUDA_CALL(cudaSetDevice(gpu));
+        CUDA_CALL(cudaDeviceSynchronize());
+    }
+}
+
+/// Copy a rectangular area from a 2d array in newly allocated memory.
+///
+double* copy_rect(double* a, int lda, int nrows, int ncols, cudaStream_t stream) {
+    if (nrows == 0 || ncols == 0) return nullptr;
+
+    double* b;
+    CUDA_CALL(cudaMalloc(&b, sizeof(double) * nrows * ncols));
+
+    int ldb = nrows * sizeof(double);
+    CUDA_CALL(cudaMemcpy2DAsync(b, ldb, a, lda * sizeof(double),
+                                sizeof(double) * nrows, ncols,
+                                cudaMemcpyDefault, stream));
+    return b;
+}
+
+/// Copy a 2d array into an existing region of another array.
+/// This is the counter part of copy_rect.
+///
+void copy_rect_back(double* a, int lda, double* b, int ldb, int nrows, int ncols, cudaStream_t stream) {
+    if (nrows == 0 || ncols == 0) return;
+
+    CUDA_CALL(cudaMemcpy2DAsync(a, lda * sizeof(double), b, ldb * sizeof(double),
+                                sizeof(double) * nrows, ncols,
+                                cudaMemcpyDefault, stream));
 }
 
 
@@ -32,66 +55,89 @@ int loopfusion_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles,
 {
     constexpr int nb = 512;
 
-    MatrixView A(a, m, n, lda);
-
     for (int j = 0; j < n; j += nb)
     {
+
         int jb = std::min(nb, n-j);
+        LAPACKE_dgetrf(LAPACK_COL_MAJOR, m-j, jb, &a[j + j*lda], lda, &ipiv[j]);
 
-        auto panel = A.subview(j, j, m-j, jb);
+        // Divide the parts of A left and right to the current panel in equal parts
+        // 
+        std::vector<Range> left_range = partition(0, j, ngpus);
+        std::vector<Range> right_range = partition(j+jb, n, ngpus);
 
-        LAPACKE_dgetrf(LAPACK_COL_MAJOR, panel.nrows, panel.ncols, panel.data, panel.stride, &ipiv[j]);
+        // Allocate local buffers 
+        // 
+        double* panel[ngpus];
+        double* left_aslices[ngpus];
+        double* right_aslices[ngpus];
 
-        auto leftA = A.subview(j, 0, m-j, j);
-        auto rightA = A.subview(j, j+jb, m-j, n-j-jb);
+        for (int gpu = 0; gpu < ngpus; gpu++) {
+            Range left  = left_range[gpu];
+            Range right = right_range[gpu];
 
-        MatrixView rightAcols[ngpus], leftAcols[ngpus], Lpanel[ngpus];
-        auto leftAcolsTiles = partitionCols(leftA, ngpus);
-        auto rightAcolsTiles = partitionCols(rightA, ngpus);
-        for (int gpu = 0; gpu < ngpus; gpu++)
-        {
             CUDA_CALL(cudaSetDevice(gpu));
-            leftAcols[gpu] = leftA.localcopy(leftAcolsTiles[gpu], streams[gpu]);
-            rightAcols[gpu] = rightA.localcopy(rightAcolsTiles[gpu], streams[gpu]);
-            Lpanel[gpu] = panel.localcopy(0, 0, panel.nrows, panel.ncols, streams[gpu]);
+            panel[gpu]         = copy_rect(&a[j + j*lda],           lda, m-j, jb, streams[gpu]);
+            left_aslices[gpu]  = copy_rect(&a[j + left.begin*lda],  lda, m-j, left.size(), streams[gpu]);
+            right_aslices[gpu] = copy_rect(&a[j + right.begin*lda], lda, m-j, right.size(), streams[gpu]);
         }
 
-        m_dlaswp(ngpus, handles, leftAcols,  1, jb, &ipiv[j], 1);
-        m_dlaswp(ngpus, handles, rightAcols, 1, jb, &ipiv[j], 1);
+        // The leading dimension of the local arrays is the same for all local arrays.
+        int ld = (m-j);
 
+        double ONE = 1.0;
+        double MINUS_ONE = -1.0;
+        for (int gpu = 0; gpu < ngpus; gpu++) {
+            Range left  = left_range[gpu];
+            Range right = right_range[gpu];
+
+            CUDA_CALL(cudaSetDevice(gpu));
+            CUBLAS_CALL(cublasDlaswp(handles[gpu], m-j, left.size(),
+                                     left_aslices[gpu], ld,
+                                     1, jb, &ipiv[j], 1));
+
+            CUBLAS_CALL(cublasDlaswp(handles[gpu], m-j, right.size(),
+                                     right_aslices[gpu], ld,
+                                     1, jb, &ipiv[j], 1));
+
+            if (right.size()) {
+                CUBLAS_CALL(cublasDtrsm(handles[gpu], CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
+                            CUBLAS_OP_N, CUBLAS_DIAG_UNIT,
+                            jb, right.size(),
+                            &ONE,
+                            panel[gpu], ld,
+                            right_aslices[gpu], ld));
+
+                CUBLAS_CALL(cublasDgemm(handles[gpu], CUBLAS_OP_N, CUBLAS_OP_N,
+                            m-(j+jb), right.size(), jb,
+                            &MINUS_ONE,
+                            &panel[gpu][jb], ld,
+                            right_aslices[gpu], ld,
+                            &ONE,
+                            &right_aslices[gpu][jb], ld));
+            }
+        }
+
+        // Copy back data
+        //
+        for (int gpu = 0; gpu < ngpus; gpu++) {
+            Range left  = left_range[gpu];
+            Range right = right_range[gpu];
+
+            CUDA_CALL(cudaSetDevice(gpu));
+            copy_rect_back(&a[j + left.begin*lda],  lda, left_aslices[gpu], ld, m-j, left.size(), streams[gpu]);
+            copy_rect_back(&a[j + right.begin*lda], lda, right_aslices[gpu], ld, m-j, right.size(), streams[gpu]);
+
+            CUDA_CALL(cudaFree(left_aslices[gpu]));
+            CUDA_CALL(cudaFree(right_aslices[gpu]));
+        }
+
+        sync_all(ngpus);
+
+        // Update the pivoted rows to global row indices
         for (int i = 0; i < jb; i++)
             ipiv[j + i] += j;
 
-        
-        if (n - (j+jb) > 0) {
-            MatrixView As[ngpus], Ls[ngpus], restAs[ngpus], Us[ngpus];
-            for (int gpu = 0; gpu < ngpus; gpu++)
-            {
-                As[gpu] = Lpanel[gpu].subview(0, 0, jb, jb);
-                Ls[gpu] = Lpanel[gpu].subview(jb, 0, Lpanel[gpu].nrows-jb, Lpanel[gpu].ncols);
-                Us[gpu] = rightAcols[gpu].subview(0, 0, jb, rightAcols[gpu].ncols);
-                restAs[gpu] = rightAcols[gpu].subview(jb, 0, rightAcols[gpu].nrows-jb, rightAcols[gpu].ncols);
-            }
-
-            m_dtrsm(ngpus, handles, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_DIAG_UNIT, 
-                    1.0, As, Us);
-            
-            m_dgemm(ngpus, handles, -1.0, Ls, Us, 1.0, restAs);
-        }
-        for (int gpu = 0; gpu < ngpus; gpu++)
-        {
-            leftA.copyback(leftAcolsTiles[gpu].row, leftAcolsTiles[gpu].col,
-                           leftAcols[gpu], streams[gpu]);
-            rightA.copyback(rightAcolsTiles[gpu].row, rightAcolsTiles[gpu].col,
-                           rightAcols[gpu], streams[gpu]);
-        }
-        for (int gpu = 0; gpu < ngpus; gpu++)
-        {
-            leftAcols[gpu].free();
-            rightAcols[gpu].free();
-            Lpanel[gpu].free();
-        }
-        sync_all(ngpus);
     }
     return 0;
 }
