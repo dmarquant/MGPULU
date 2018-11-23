@@ -198,7 +198,6 @@ int dlaswp(cublasHandle_t handle, int off, MatrixView& A, int k1, int k2, const 
     for (int i = k1-1; i < k2; i++)
     {
         cublasDswap(handle, A.ncols, &A.data[i-off], A.stride, &A.data[ipiv[i]-1-off], A.stride);
-        CUDA_CALL(cudaDeviceSynchronize());
     }
     return 0;
 }
