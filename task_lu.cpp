@@ -212,7 +212,7 @@ void copy_back_func(int device, void* p) {
 int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
 {
     // Block sized used in the computation
-    constexpr int nb = 512;
+    constexpr int nb = 256;
 
     MatrixView A(a, m, n, lda);
 
@@ -241,6 +241,7 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
 
         std::vector<int> sync_events(ngpus);
 
+#ifdef OVERLAP
         Range start{j+jb, std::min(j+jb+nb, A.ncols)};
         if (start.size() != 0) {
             int gpu = 0;
@@ -274,10 +275,14 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
 
             int dummy = 0;
             int sync_task = scheduler.enqueue_task("synchronize GPU ", 0, NULL_EVENT, cu_synchronize, &dummy);
+            sync_events.push_back(sync_task);
             next_dgetrf_event = sync_task;
         }
+#endif
         std::vector<Range> colranges = partition_min(j+jb, A.ncols, ngpus, jb);
+#ifdef OVERLAP
         colranges[0].begin = std::min(colranges[0].begin + jb, colranges[0].end);
+#endif
         for (int gpu = 0; gpu < ngpus; gpu++) {
             if (colranges[gpu].size() != 0) {
                 MatrixView* U_A22 = new MatrixView;
@@ -315,6 +320,9 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
 
         sync_events.push_back(swap_left_task);
         next_iteration_event = scheduler.aggregate_event(sync_events);
+#ifndef OVERLAP
+        next_dgetrf_event = next_iteration_event;
+#endif
     }
 
     scheduler.run();

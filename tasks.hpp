@@ -7,6 +7,7 @@
 #include <pthread.h>
 
 #include <unistd.h>
+#include "util.h"
 
 constexpr int CPU_DEVICE = -1;
 constexpr int NULL_EVENT = 0;
@@ -69,6 +70,8 @@ struct GpuTaskScheduler {
 
     std::vector<Event> events;
 
+    double start_time;
+
 public:
     GpuTaskScheduler(int ngpus) {
         gpu_queues.resize(ngpus);
@@ -124,6 +127,8 @@ public:
     void run() {
         std::vector<pthread_t> threads(ngpus());
         std::vector<TaskRunnerArgs> args(ngpus());
+
+        start_time = get_real_time();
 
         for (int i = 0; i < ngpus(); i++) {
             args[i].scheduler = this;
@@ -184,7 +189,10 @@ private:
         fflush(stdout);
 #endif
 
+        //double t_begin = get_real_time();
         task->task_func(device, task->user_data);
+        //double t_end = get_real_time();
+        //printf("%d: %s(%d): %fs-%fs\n", task->event_id, task->name, device, t_begin - start_time, t_end - start_time);
 
 #ifdef DEBUG_TASKS
         printf("D(%d): Stop task %s(%d)\n", device, task->name, task->event_id);
