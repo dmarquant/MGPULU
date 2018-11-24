@@ -212,11 +212,12 @@ void copy_back_func(int device, void* p) {
 int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
 {
     // Block sized used in the computation
-    constexpr int nb = 256;
+    constexpr int nb = 1024;
 
     MatrixView A(a, m, n, lda);
 
     GpuTaskScheduler scheduler(ngpus);
+    scheduler.streams = streams;
 
     // Event to wait on before starting the next iteration
     int next_iteration_event = NULL_EVENT;
@@ -245,6 +246,7 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         Range start{j+jb, std::min(j+jb+nb, A.ncols)};
         if (start.size() != 0) {
             int gpu = 0;
+            printf("GPU %d: %dcols\n", gpu, start.size());
 
             MatrixView* U_A22 = new MatrixView;
             MatrixView* U     = new MatrixView;
@@ -285,6 +287,8 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
 #endif
         for (int gpu = 0; gpu < ngpus; gpu++) {
             if (colranges[gpu].size() != 0) {
+                printf("GPU %d: %dcols\n", gpu, colranges[gpu].size());
+
                 MatrixView* U_A22 = new MatrixView;
                 MatrixView* U     = new MatrixView;
                 MatrixView* A22   = new MatrixView;
@@ -313,7 +317,7 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
                 scheduler.enqueue_task("copy_back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
 
                 int dummy = 0;
-                int sync_task = scheduler.enqueue_task("synchronize GPU ", 0, NULL_EVENT, cu_synchronize, &dummy);
+                int sync_task = scheduler.enqueue_task("synchronize GPU ", gpu, NULL_EVENT, cu_synchronize, &dummy);
                 sync_events.push_back(sync_task);
             }
         }
@@ -326,6 +330,14 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
     }
 
     scheduler.run();
+
+#ifdef PROFILE_TASKS
+    for (size_t i = 0; i < scheduler.durations.size(); i++) {
+        Duration d = scheduler.durations[i];
+        printf("%d\t%s\t%f\t%f\t%f\n", d.device_id, d.name, d.start_time, d.stop_time, d.stop_time-d.start_time);
+    }
+#endif
+
     return 0;
 }
 

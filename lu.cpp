@@ -53,7 +53,7 @@ void copy_rect_back(double* a, int lda, double* b, int ldb, int nrows, int ncols
 ///
 int loopfusion_dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
 {
-    constexpr int nb = 512;
+    constexpr int nb = 1024;
 
     for (int j = 0; j < n; j += nb)
     {
