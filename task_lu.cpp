@@ -21,323 +21,306 @@ using namespace mblas;
 
 
 struct DgetrfArgs {
-    MatrixView* A;
+    int m, n;
+    double* A;
+    int lda;
     int* ipiv;
-    int j;
 };
 
 void dgetrf_func(int device_id, void* p) {
     DgetrfArgs* args = static_cast<DgetrfArgs*>(p);
-
-    MatrixView* A = args->A;
-    int* ipiv = args->ipiv;
-    int j = args->j;
-
-    LAPACKE_dgetrf(LAPACK_COL_MAJOR, A->nrows, A->ncols, A->data, A->stride, ipiv);
-    
-    // Adjust indices in 'ipiv' to global indices
-    for (int i = 0; i < A->ncols; i++)
-        ipiv[i] += j;
-
+    LAPACKE_dgetrf(LAPACK_COL_MAJOR, args->m, args->n, args->A, args->lda, args->ipiv);
 }
 
 struct DlaswpArgs {
-    MatrixView* A;
-    int* ipiv;
-    int k1, k2;
-};
+    int m, n;
+    double* A;
+    int lda;
 
-struct CuDlaswpArgs {
-    cublasHandle_t cublas;
-    int j;
-    MatrixView* A;
-    int* ipiv;
     int k1, k2;
+    int* ipiv;
 };
 
 void dlaswp_func(int device_id, void* p) {
     DlaswpArgs* args = static_cast<DlaswpArgs*>(p);
-    
-    LAPACKE_dlaswp(LAPACK_COL_MAJOR, args->A->ncols, args->A->data, args->A->stride,
-                   args->k1, args->k2, args->ipiv, 1);    
+    LAPACKE_dlaswp(LAPACK_COL_MAJOR, args->n, args->A, args->lda,
+                   args->k1, args->k2, args->ipiv, 1);
 }
 
-void cu_dlaswp_func(int device_id, void* p) {
+struct AllocArgs {
+    int m, jb, ncols;
+    double** panel;
+    double** aslice;
+};
+
+void allocate_temp_func(int device_id, void* p) {
+    AllocArgs* args = static_cast<AllocArgs*>(p);
+
+    CUDA_CALL(cudaSetDevice(device_id));
+    CUDA_CALL(cudaMalloc(args->panel, sizeof(double) * args->m * args->jb));
+    CUDA_CALL(cudaMalloc(args->aslice, sizeof(double) * args->m * args->ncols));
+}
+
+struct FreeArgs {
+    double** panel;
+    double** aslice;
+};
+
+void free_temp_func(int device_id, void* p) {
+    FreeArgs* args = static_cast<FreeArgs*>(p);
+    CUDA_CALL(cudaSetDevice(device_id));
+    CUDA_CALL(cudaFree(*args->panel));
+    CUDA_CALL(cudaFree(*args->aslice));
+}
+
+struct CopyRectArgs {
+    double** A_slice;
+    double* A;
+    int lda;
+
+    int row_begin, row_end;
+    int col_begin, col_end;
+
+    cudaStream_t stream;
+};
+
+void copy_rect_func(int device_id, void* p) {
+    CopyRectArgs* args = static_cast<CopyRectArgs*>(p);
+
+    int nrows = args->row_end - args->row_begin;
+    int ncols = args->col_end - args->col_begin;
+
+    double* A_start = args->A + (args->row_begin + args->col_begin * args->lda);
+
+    CUDA_CALL(cudaSetDevice(device_id));
+    CUDA_CALL(cudaMemcpy2DAsync(*args->A_slice, nrows * sizeof(double),
+                                A_start,        args->lda * sizeof(double),
+                                nrows * sizeof(double), ncols,
+                                cudaMemcpyDefault, args->stream));
+}
+
+struct CopyBackArgs {
+    double* A;
+    int lda;
+    double** A_slice;
+
+    int row_begin, row_end;
+    int col_begin, col_end;
+
+    cudaStream_t stream;
+};
+
+void copy_back_func(int device_id, void* p) {
+    CopyBackArgs* args = static_cast<CopyBackArgs*>(p);
+
+    int nrows = args->row_end - args->row_begin;
+    int ncols = args->col_end - args->col_begin;
+
+    double* A_start = args->A + (args->row_begin + args->col_begin * args->lda);
+
+    CUDA_CALL(cudaSetDevice(device_id));
+    CUDA_CALL(cudaMemcpy2DAsync(A_start,        args->lda * sizeof(double),
+                                *args->A_slice, nrows * sizeof(double),
+                                nrows * sizeof(double), ncols,
+                                cudaMemcpyDefault, args->stream));
+}
+
+struct CuDlaswpArgs {
+    int m, n;
+    double** A;
+    int lda;
+
+    int k1, k2;
+    int* ipiv;
+    cublasHandle_t handle;
+};
+
+void cudlaswp_func(int device_id, void* p) {
     CuDlaswpArgs* args = static_cast<CuDlaswpArgs*>(p);
 
     CUDA_CALL(cudaSetDevice(device_id));
-    mblas::dlaswp(args->cublas, args->j, *args->A, args->k1, args->k2, args->ipiv, 1);
+    CUBLAS_CALL(cublasDlaswp(args->handle, args->m, args->n, *args->A, args->lda,
+                 args->k1, args->k2, args->ipiv, 1));
 }
 
 struct CuDtrsmArgs {
-    cublasHandle_t cublas;
-    MatrixView* A;
-    MatrixView* B;
+    int m, n;
+    double** A;
+    int lda;
+    double** B;
+    int ldb;
+    cublasHandle_t handle;
 };
 
-void cu_dtrsm_func(int device_id, void* p) {
+void cudtrsm_func(int device_id, void* p) {
     CuDtrsmArgs* args = static_cast<CuDtrsmArgs*>(p);
 
+    double ONE = 1.0;
+
     CUDA_CALL(cudaSetDevice(device_id));
-    mblas::dtrsm(args->cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_DIAG_UNIT, 
-                 1.0, *args->A, *args->B);
+    CUBLAS_CALL(cublasDtrsm(args->handle, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
+                            CUBLAS_OP_N, CUBLAS_DIAG_UNIT,
+                            args->m, args->n,
+                            &ONE,
+                            *args->A, args->lda,
+                            *args->B, args->ldb));
 }
 
 struct CuDgemmArgs {
-    cublasHandle_t cublas;
-    MatrixView* A;
-    MatrixView* B;
-    MatrixView* C;
+    int jb;
+    int m, n, k;
+    double** A;
+    int lda;
+    double** B;
+    int ldb;
+    double** C;
+    int ldc;
+    cublasHandle_t handle;
 };
 
-void cu_dgemm_func(int device_id, void* p) {
+void cudgemm_func(int device_id, void* p) {
     CuDgemmArgs* args = static_cast<CuDgemmArgs*>(p);
 
+    double ONE = 1.0;
+    double MINUS_ONE = -1.0;
+
+    double* a = *args->A;
+    double* b = *args->B;
+    double* c = *args->C;
+
     CUDA_CALL(cudaSetDevice(device_id));    
-    mblas::dgemm(args->cublas, -1.0, *args->A, *args->B, 1.0, *args->C);
+    CUBLAS_CALL(cublasDgemm(args->handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                            args->m, args->n, args->k,
+                            &MINUS_ONE,
+                            &a[args->jb], args->lda,
+                            b, args->ldb,
+                            &ONE,
+                            &c[args->jb], args->ldc));
 }
 
-void cu_synchronize(int device_id, void* p) {
+struct CuSynchronizeArgs { int dummy; };
+
+void cusynchronize(int device_id, void* p) {
     CUDA_CALL(cudaSetDevice(device_id));    
     CUDA_CALL(cudaDeviceSynchronize());
 }
 
-struct Copy_U_A22_Args {
-    // Current iteration of LU 
-    int j;
-    int jb;
+int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n,
+           double* a, int lda, int* ipiv) {
 
-    // The whole matrix
-    MatrixView* A;
-
-    // The column range of A to work on
-    int col_begin;
-    int col_end;
-
-    // Blocks U and A22 (only a subset of the columns)
-    // This is locally allocated memory
-    MatrixView* U_A22;
-
-    // Block U (only a view to memory U_A22)
-    MatrixView* U;
-
-    // Block A22 (only a view to memory U_A22);
-    MatrixView* A22;
-
-    cudaStream_t stream;
-};
-
-void copy_u_a22_func(int device, void* p) {
-    Copy_U_A22_Args* args = static_cast<Copy_U_A22_Args*>(p);
-    int j = args->j;
-    int jb = args->jb;
-    MatrixView* A = args->A;
-
-    // Copy U and A22 to a buffer allocated on the device
-    CUDA_CALL(cudaSetDevice(device));
-    *args->U_A22 = A->localcopy(j, args->col_begin, A->nrows-j,
-                                args->col_end - args->col_begin, args->stream);
-
-    // Create views to the blocks U and A22
-    *args->U   = args->U_A22->subview( 0, 0, jb, args->U_A22->ncols);
-    *args->A22 = args->U_A22->subview(jb, 0, args->U_A22->nrows - jb, args->U_A22->ncols);
-}
-
-struct Copy_A11_L_Args {
-    // Current iteration of LU 
-    int j;
-    int jb;
-
-    // The whole matrix
-    MatrixView* A;
-
-    // Blocks A11 and L, the allocated memory local to the GPU
-    MatrixView* A11_L;
-
-    // Views to A11 and L (only views to A11_L)
-    MatrixView* A11;
-    MatrixView* L;
-
-    cudaStream_t stream;
-};
-
-void copy_a11_l_func(int device, void* p) {
-    Copy_A11_L_Args* args = static_cast<Copy_A11_L_Args*>(p);
-    int j = args->j;
-    int jb = args->jb;
-    MatrixView* A = args->A;
-
-    // Copy A11 and L to a local buffer 
-    CUDA_CALL(cudaSetDevice(device));
-    *args->A11_L = A->localcopy(j, j, A->nrows-j, jb, args->stream);
-
-    *args->A11 = args->A11_L->subview(0, 0, jb, jb);
-    *args->L   = args->A11_L->subview(jb, 0, args->A11_L->nrows-jb, jb);
-}
-
-struct Copy_Back_Args {
-    // Current iteration of LU 
-    int j;
-    int jb;
-
-    // The whole matrix
-    MatrixView* A;
-
-    // The column range of A to work on
-    int col_begin;
-    int col_end;
-
-    // Blocks U and A22 (only a subset of the columns)
-    // This is locally allocated memory
-    MatrixView* U_A22;
-
-    // Doesn't get copied but is freed
-    MatrixView* A11_L;
-
-    cudaStream_t stream;
-};
-
-void copy_back_func(int device, void* p) {
-    Copy_Back_Args* args = static_cast<Copy_Back_Args*>(p);
-    int j = args->j;
-    MatrixView* A = args->A;
-
-    CUDA_CALL(cudaSetDevice(device));
-    A->copyback(j, args->col_begin, *args->U_A22, args->stream);
-
-    args->U_A22->free();
-    args->A11_L->free();
-}
-
-int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int n, double* a, int lda, int* ipiv)
-{
-    // Block sized used in the computation
     constexpr int nb = 1024;
 
-    MatrixView A(a, m, n, lda);
+    GpuTaskScheduler scheduler(ngpus, streams);
 
-    GpuTaskScheduler scheduler(ngpus);
-    scheduler.streams = streams;
-
-    // Event to wait on before starting the next iteration
     int next_iteration_event = NULL_EVENT;
 
-    // The next dgetrf call can already start while some GPUs are still working
-    int next_dgetrf_event = NULL_EVENT;
-
     for (int j = 0; j < n; j += nb) {
-
-        // The actual block size for this iteration (may be smaller at the edge)
         int jb = std::min(nb, n-j);
 
-        // Do partial LU decomposition
-        MatrixView* panel = new MatrixView(A.subview(j, j, m-j, jb));
-        DgetrfArgs dgetrf_args{panel, &ipiv[j], j};
-        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_dgetrf_event, dgetrf_func, &dgetrf_args);
+        DgetrfArgs dgetrf_args{m-j, jb, &a[j + j*lda], lda, &ipiv[j]};
+        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_iteration_event,
+                                                 dgetrf_func, &dgetrf_args);
 
-        // Apply row swaps left of the panel
-        MatrixView* leftA = new MatrixView(A.subview(0, 0, m, j));
-        DlaswpArgs left_args{leftA, ipiv, j+1, j+jb};
-        int swap_left_task = scheduler.enqueue_task("dlaswp", CPU_DEVICE, dgetrf_task, dlaswp_func, &left_args);
+        DlaswpArgs swap_left_args{m-j, j, &a[j], lda, 1, jb, &ipiv[j]};
+        int swap_left_task = scheduler.enqueue_task("dlaswp", CPU_DEVICE, dgetrf_task,
+                                                    dlaswp_func, &swap_left_args);
+        std::vector<int> done_events;
+        done_events.reserve(ngpus+1);
+        done_events.push_back(swap_left_task);
 
-        std::vector<int> sync_events(ngpus);
+        std::vector<Range> ranges = partition(j+jb, n, ngpus);
 
-#ifdef OVERLAP
-        Range start{j+jb, std::min(j+jb+nb, A.ncols)};
-        if (start.size() != 0) {
-            int gpu = 0;
-            printf("GPU %d: %dcols\n", gpu, start.size());
+        double** panel   = (double**)malloc(sizeof(double*) * ngpus);
+        double** aslices = (double**)malloc(sizeof(double*) * ngpus);
 
-            MatrixView* U_A22 = new MatrixView;
-            MatrixView* U     = new MatrixView;
-            MatrixView* A22   = new MatrixView;
-
-            Copy_U_A22_Args copy_u_a22_args{j, jb, &A, 
-                                            start.begin, start.end, 
-                                            U_A22, U, A22, streams[gpu]};
-            scheduler.enqueue_task("copy_U_A22", gpu, next_iteration_event, copy_u_a22_func, &copy_u_a22_args);
-
-            MatrixView* A11_L = new MatrixView;
-            MatrixView* A11   = new MatrixView;
-            MatrixView* L     = new MatrixView;
-            Copy_A11_L_Args copy_a11_l_args{j, jb, &A, A11_L, A11, L, streams[gpu]};
-            scheduler.enqueue_task("copy_A11_L", gpu, dgetrf_task, copy_a11_l_func, &copy_a11_l_args);
-
-            CuDlaswpArgs swap_right_args{handles[gpu], j, U_A22, ipiv, j+1, j+jb};
-            scheduler.enqueue_task("cudlaswp", gpu, NULL_EVENT, cu_dlaswp_func, &swap_right_args);
-
-            CuDtrsmArgs dtrsm_args{handles[gpu], A11, U};
-            scheduler.enqueue_task("cudtrsm", gpu, NULL_EVENT, cu_dtrsm_func, &dtrsm_args);
-
-            CuDgemmArgs dgemm_args{handles[gpu], L, U, A22};
-            scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cu_dgemm_func, &dgemm_args);
-
-            Copy_Back_Args copy_back_args{j, jb, &A, start.begin, start.end, U_A22, A11_L};
-            scheduler.enqueue_task("copy_back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
-
-            int dummy = 0;
-            int sync_task = scheduler.enqueue_task("synchronize GPU ", 0, NULL_EVENT, cu_synchronize, &dummy);
-            sync_events.push_back(sync_task);
-            next_dgetrf_event = sync_task;
-        }
-#endif
-        std::vector<Range> colranges = partition_min(j+jb, A.ncols, ngpus, jb);
-#ifdef OVERLAP
-        colranges[0].begin = std::min(colranges[0].begin + jb, colranges[0].end);
-#endif
         for (int gpu = 0; gpu < ngpus; gpu++) {
-            if (colranges[gpu].size() != 0) {
-                printf("GPU %d: %dcols\n", gpu, colranges[gpu].size());
+            Range range = ranges[gpu];
 
-                MatrixView* U_A22 = new MatrixView;
-                MatrixView* U     = new MatrixView;
-                MatrixView* A22   = new MatrixView;
-
-                Copy_U_A22_Args copy_u_a22_args{j, jb, &A, 
-                                                colranges[gpu].begin, colranges[gpu].end, 
-                                                U_A22, U, A22, streams[gpu]};
-                scheduler.enqueue_task("copy_U_A22", gpu, next_iteration_event, copy_u_a22_func, &copy_u_a22_args);
-
-                MatrixView* A11_L = new MatrixView;
-                MatrixView* A11   = new MatrixView;
-                MatrixView* L     = new MatrixView;
-                Copy_A11_L_Args copy_a11_l_args{j, jb, &A, A11_L, A11, L, streams[gpu]};
-                scheduler.enqueue_task("copy_A11_L", gpu, dgetrf_task, copy_a11_l_func, &copy_a11_l_args);
-
-                CuDlaswpArgs swap_right_args{handles[gpu], j, U_A22, ipiv, j+1, j+jb};
-                scheduler.enqueue_task("cudlaswp", gpu, NULL_EVENT, cu_dlaswp_func, &swap_right_args);
-
-                CuDtrsmArgs dtrsm_args{handles[gpu], A11, U};
-                scheduler.enqueue_task("cudtrsm", gpu, NULL_EVENT, cu_dtrsm_func, &dtrsm_args);
-
-                CuDgemmArgs dgemm_args{handles[gpu], L, U, A22};
-                scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cu_dgemm_func, &dgemm_args);
-
-                Copy_Back_Args copy_back_args{j, jb, &A, colranges[gpu].begin, colranges[gpu].end, U_A22, A11_L};
-                scheduler.enqueue_task("copy_back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
-
-                int dummy = 0;
-                int sync_task = scheduler.enqueue_task("synchronize GPU ", gpu, NULL_EVENT, cu_synchronize, &dummy);
-                sync_events.push_back(sync_task);
+            if (range.size()) {
+                AllocArgs alloc_args{m-j, jb, range.size(), &panel[gpu], &aslices[gpu]};
+                scheduler.enqueue_task("allocate temp", gpu, NULL_EVENT, allocate_temp_func, &alloc_args);
             }
         }
 
-        sync_events.push_back(swap_left_task);
-        next_iteration_event = scheduler.aggregate_event(sync_events);
-#ifndef OVERLAP
-        next_dgetrf_event = next_iteration_event;
-#endif
+        for (int gpu = 0; gpu < ngpus; gpu++) {
+            Range range = ranges[gpu];
+            if (range.size()) {
+                //
+                // Copy over the part of A this GPU is working on
+                //
+                CopyRectArgs copy_aslice_args{&aslices[gpu], a, lda, j, m, range.begin, range.end, streams[gpu]};
+                scheduler.enqueue_task("copy A slice", gpu, next_iteration_event, copy_rect_func, &copy_aslice_args);
+                
+                //
+                // Apply row swaps to A right of the current panel
+                // 
+                CuDlaswpArgs cudlaswp_args{m-j, range.size(), &aslices[gpu], m-j, 1, jb, &ipiv[j], handles[gpu]};
+                scheduler.enqueue_task("cudlaswp", gpu, dgetrf_task, cudlaswp_func, &cudlaswp_args);
+
+                //
+                // Copy over the panel updated by the last 'dgetrf' call
+                // 
+                CopyRectArgs copy_panel_args{&panel[gpu], a, lda, j, m, j, j+jb, streams[gpu]};
+                scheduler.enqueue_task("copy panel", gpu, dgetrf_task, copy_rect_func, &copy_panel_args);
+
+                //
+                // Update the upper part of my A slice
+                //
+                CuDtrsmArgs cudtrsm_args{jb, range.size(), &panel[gpu], m-j, &aslices[gpu], m-j, handles[gpu]};
+                scheduler.enqueue_task("cudtrsm", gpu, NULL_EVENT, cudtrsm_func, &cudtrsm_args);
+
+                //
+                // Update the rest of my A slice
+                //
+                CuDgemmArgs cudgemm_args{jb, m-(j+jb), range.size(), jb,
+                                         &panel[gpu], m-j, 
+                                         &aslices[gpu], m-j,
+                                         &aslices[gpu], m-j,
+                                         handles[gpu]};
+                scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cudgemm_func, &cudgemm_args);
+
+                //
+                // Copy back my updated slice
+                //
+                CopyBackArgs copy_back_args{a, lda, &aslices[gpu], j, m, range.begin, range.end};
+                scheduler.enqueue_task("copy back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
+            }
+
+        }
+
+        for (int gpu = 0; gpu < ngpus; gpu++) {
+            Range range = ranges[gpu];
+            if (range.size()) {
+                FreeArgs free_args{&panel[gpu], &aslices[gpu]};
+                scheduler.enqueue_task("free temp", gpu, NULL_EVENT, free_temp_func, &free_args);
+
+                CuSynchronizeArgs sync_args;
+                int done_event = scheduler.enqueue_task("synchronize", gpu, NULL_EVENT, cusynchronize, &sync_args);
+                done_events.push_back(done_event);
+            }
+
+        }
+
+        next_iteration_event = scheduler.aggregate_event(done_events);
     }
 
     scheduler.run();
 
+    for (int j = 0; j < n; j += nb) {
+        int jb = std::min(nb, n-j);
+
+        //
+        // Update the pivoted rows to global row indices
+        // 
+        for (int i = 0; i < jb; i++)
+            ipiv[j + i] += j;
+    }
 #ifdef PROFILE_TASKS
     for (size_t i = 0; i < scheduler.durations.size(); i++) {
         Duration d = scheduler.durations[i];
         printf("%d\t%s\t%f\t%f\t%f\n", d.device_id, d.name, d.start_time, d.stop_time, d.stop_time-d.start_time);
     }
 #endif
-
     return 0;
 }
 

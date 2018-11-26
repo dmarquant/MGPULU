@@ -81,7 +81,7 @@ struct GpuTaskScheduler {
 
     cudaStream_t* streams;
 
-    GpuTaskScheduler(int ngpus) {
+    GpuTaskScheduler(int ngpus, cudaStream_t* streams) : streams(streams) {
         gpu_queues.resize(ngpus);
 
         Event null_event = {}; null_event.type = ET_SIMPLE_EVENT;
@@ -164,6 +164,7 @@ private:
 
         CUDA_CALL(cudaSetDevice(device_id));
 
+#ifdef PROFILE_TASKS
         std::vector<cudaEvent_t> start_events(my_queue.size()), end_events(my_queue.size());
         for (size_t i = 0; i < my_queue.size(); i++) {
             CUDA_CALL(cudaEventCreate(&start_events[i]));
@@ -173,18 +174,24 @@ private:
         cudaEvent_t scheduler_start;
         CUDA_CALL(cudaEventCreate(&scheduler_start));
         CUDA_CALL(cudaEventRecord(scheduler_start, scheduler->streams[device_id]));
+#endif
 
         for (size_t i = 0; i < my_queue.size(); i++) {
             Task* t = &my_queue[i];
 
+#ifdef PROFILE_TASKS
             CUDA_CALL(cudaEventRecord(start_events[i], scheduler->streams[device_id]));
+#endif
             scheduler->run_task(device_id, t);
+#ifdef PROFILE_TASKS
             CUDA_CALL(cudaEventRecord(end_events[i], scheduler->streams[device_id]));
+#endif
         }
 
         CUDA_CALL(cudaSetDevice(device_id));
         CUDA_CALL(cudaDeviceSynchronize());
 
+#ifdef PROFILE_TASKS
         for (size_t i = 0; i < my_queue.size(); i++) {
             float start_elapsed, end_elapsed;
 
@@ -196,6 +203,7 @@ private:
             scheduler->durations[my_queue[i].event_id].start_time = start_elapsed/1000.0;
             scheduler->durations[my_queue[i].event_id].stop_time = end_elapsed/1000.0;
         }
+#endif
 
         return nullptr;
     }
