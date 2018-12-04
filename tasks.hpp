@@ -7,6 +7,10 @@
 #include <pthread.h>
 
 #include <unistd.h>
+#include "util.h"
+
+constexpr int CPU_DEVICE = -1;
+constexpr int NULL_EVENT = 0;
 
 typedef void (*TaskFunc) (int, void*);
 
@@ -37,7 +41,12 @@ struct AggregateEvent {
 };
 
 struct Event {
-    Event() : type(ET_SIMPLE_EVENT) {}
+    Event() {
+        type = ET_SIMPLE_EVENT;
+        simple.done = false;
+        pthread_mutex_init(&simple.mutex, NULL);
+        pthread_cond_init(&simple.cond, NULL);
+    }
 
     EventType type;
 
@@ -54,15 +63,25 @@ struct TaskRunnerArgs {
     GpuTaskScheduler* scheduler;
 };
 
+struct Duration {
+    int device_id;
+    const char* name;
+    double start_time, stop_time;
+};
+
 struct GpuTaskScheduler {
     std::vector<Task> cpu_queue;
 
     std::vector<std::vector<Task>> gpu_queues;
 
     std::vector<Event> events;
+    std::vector<Duration> durations;
 
-public:
-    GpuTaskScheduler(int ngpus) {
+    double start_time;
+
+    cudaStream_t* streams;
+
+    GpuTaskScheduler(int ngpus, cudaStream_t* streams) : streams(streams) {
         gpu_queues.resize(ngpus);
 
         Event null_event = {}; 
@@ -124,6 +143,9 @@ public:
         std::vector<pthread_t> threads(ngpus());
         std::vector<TaskRunnerArgs> args(ngpus());
 
+        start_time = get_real_time();
+        durations.resize(events.size());
+
         for (int i = 0; i < ngpus(); i++) {
             args[i].scheduler = this;
             args[i].device_id = i;
@@ -147,10 +169,48 @@ private:
 
         std::vector<Task>& my_queue = scheduler->gpu_queues[device_id];        
 
+        CUDA_CALL(cudaSetDevice(device_id));
+
+#ifdef PROFILE_TASKS
+        std::vector<cudaEvent_t> start_events(my_queue.size()), end_events(my_queue.size());
+        for (size_t i = 0; i < my_queue.size(); i++) {
+            CUDA_CALL(cudaEventCreate(&start_events[i]));
+            CUDA_CALL(cudaEventCreate(&end_events[i]));
+        }
+
+        cudaEvent_t scheduler_start;
+        CUDA_CALL(cudaEventCreate(&scheduler_start));
+        CUDA_CALL(cudaEventRecord(scheduler_start, scheduler->streams[device_id]));
+#endif
+
         for (size_t i = 0; i < my_queue.size(); i++) {
             Task* t = &my_queue[i];
+
+#ifdef PROFILE_TASKS
+            CUDA_CALL(cudaEventRecord(start_events[i], scheduler->streams[device_id]));
+#endif
             scheduler->run_task(device_id, t);
+#ifdef PROFILE_TASKS
+            CUDA_CALL(cudaEventRecord(end_events[i], scheduler->streams[device_id]));
+#endif
         }
+
+        CUDA_CALL(cudaSetDevice(device_id));
+        CUDA_CALL(cudaDeviceSynchronize());
+
+#ifdef PROFILE_TASKS
+        for (size_t i = 0; i < my_queue.size(); i++) {
+            float start_elapsed, end_elapsed;
+
+            CUDA_CALL(cudaEventElapsedTime(&start_elapsed, scheduler_start, start_events[i]));
+            CUDA_CALL(cudaEventElapsedTime(&end_elapsed, scheduler_start, end_events[i]));
+
+            scheduler->durations[my_queue[i].event_id].device_id = device_id;
+            scheduler->durations[my_queue[i].event_id].name = my_queue[i].name;
+            scheduler->durations[my_queue[i].event_id].start_time = start_elapsed/1000.0;
+            scheduler->durations[my_queue[i].event_id].stop_time = end_elapsed/1000.0;
+        }
+#endif
 
         return nullptr;
     }
@@ -166,8 +226,9 @@ private:
             }
             pthread_mutex_unlock(&events[event_id].simple.mutex);
         } else {
-            for (int i = 0; i < events[event_id].aggregate.num_events; i++)
+            for (int i = 0; i < events[event_id].aggregate.num_events; i++) {
                 wait_for_event(events[event_id].aggregate.event_list[i]);
+            }
         }
     }
 
@@ -175,14 +236,25 @@ private:
         wait_for_event(task->wait_on);
 
 #ifdef DEBUG_TASKS
-        printf("D(%d): Starting task %s\n", device, task->name);
+        printf("D(%d): Starting task %s(%d)\n", device, task->name, task->event_id);
         fflush(stdout);
 #endif
 
+#ifdef PROFILE_TASKS
+        double t_begin = get_real_time();
+#endif
         task->task_func(device, task->user_data);
 
+#ifdef PROFILE_TASKS
+        double t_end = get_real_time();
+        durations[task->event_id].device_id = -1;
+        durations[task->event_id].name = task->name;
+        durations[task->event_id].start_time = t_begin - start_time;
+        durations[task->event_id].stop_time  = t_end - start_time;
+#endif 
+
 #ifdef DEBUG_TASKS
-        printf("D(%d): Stop task %s\n", device, task->name);
+        printf("D(%d): Stop task %s(%d)\n", device, task->name, task->event_id);
         fflush(stdout);
 #endif
 

@@ -72,6 +72,19 @@ public:
         return mv;
     }
 
+    MatrixView localcopy(int row, int col, int nrows, int ncols)
+    {
+        MatrixView mv{NULL, nrows, ncols, nrows};
+        if (nrows * ncols != 0)
+        {
+            CUDA_CALL(cudaMalloc(&mv.data, sizeof(double) * nrows * ncols));
+            CUDA_CALL(cudaMemcpy2D(mv.data, sizeof(double) * nrows, 
+                                   this->data + row + col * this->stride, sizeof(double) * this->stride,
+                                    nrows * sizeof(double), ncols, cudaMemcpyDefault));
+        }
+        return mv;
+    }
+
     MatrixView localcopy(Tile t, cudaStream_t stream)
     {
         return localcopy(t.row, t.col, t.nrows, t.ncols, stream);
@@ -172,6 +185,19 @@ int dlaswp(cublasHandle_t handle, MatrixView& A, int k1, int k2, const int* ipiv
     for (int i = k1-1; i < k2; i++)
     {
         cublasDswap(handle, A.ncols, &A.data[i], A.stride, &A.data[ipiv[i]-1], A.stride);
+    }
+    return 0;
+}
+
+int dlaswp(cublasHandle_t handle, int off, MatrixView& A, int k1, int k2, const int* ipiv, int incx)
+{
+    assert(incx == 1);
+
+    if (A.ncols == 0) return 0;
+
+    for (int i = k1-1; i < k2; i++)
+    {
+        cublasDswap(handle, A.ncols, &A.data[i-off], A.stride, &A.data[ipiv[i]-1-off], A.stride);
     }
     return 0;
 }
