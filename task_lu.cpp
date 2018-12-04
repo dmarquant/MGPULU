@@ -25,6 +25,8 @@ struct DgetrfArgs {
     double* A;
     int lda;
     int* ipiv;
+
+    cudaStream_t stream;
 };
 
 void dgetrf_func(int device_id, void* p) {
@@ -214,6 +216,20 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
 
     int next_iteration_event = NULL_EVENT;
 
+    double** panel   = (double**)malloc(sizeof(double*) * ngpus);
+    double** aslices = (double**)malloc(sizeof(double*) * ngpus);
+
+    std::vector<Range> ranges = partition_min(0, n, ngpus, nb);
+    for (int gpu = 0; gpu < ngpus; gpu++) {
+        Range range = ranges[gpu];
+
+        if (range.size()) {
+            CUDA_CALL(cudaSetDevice(gpu));
+            CUDA_CALL(cudaMalloc(&panel[gpu], sizeof(double) * m * nb));
+            CUDA_CALL(cudaMalloc(&aslices[gpu], sizeof(double) * m * range.size()));
+        }
+    }
+
     for (int j = 0; j < n; j += nb) {
         int jb = std::min(nb, n-j);
 
@@ -221,26 +237,16 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_iteration_event,
                                                  dgetrf_func, &dgetrf_args);
 
+        next_iteration_event = scheduler.aggregate_event({dgetrf_task, next_iteration_event});
+
         DlaswpArgs swap_left_args{m-j, j, &a[j], lda, 1, jb, &ipiv[j]};
-        int swap_left_task = scheduler.enqueue_task("dlaswp", CPU_DEVICE, dgetrf_task,
+        int swap_left_task = scheduler.enqueue_task("dlaswp", CPU_DEVICE, next_iteration_event,
                                                     dlaswp_func, &swap_left_args);
         std::vector<int> done_events;
         done_events.reserve(ngpus+1);
         done_events.push_back(swap_left_task);
 
-        std::vector<Range> ranges = partition(j+jb, n, ngpus);
-
-        double** panel   = (double**)malloc(sizeof(double*) * ngpus);
-        double** aslices = (double**)malloc(sizeof(double*) * ngpus);
-
-        for (int gpu = 0; gpu < ngpus; gpu++) {
-            Range range = ranges[gpu];
-
-            if (range.size()) {
-                AllocArgs alloc_args{m-j, jb, range.size(), &panel[gpu], &aslices[gpu]};
-                scheduler.enqueue_task("allocate temp", gpu, NULL_EVENT, allocate_temp_func, &alloc_args);
-            }
-        }
+        std::vector<Range> ranges = partition_min(j+jb, n, ngpus, jb);
 
         for (int gpu = 0; gpu < ngpus; gpu++) {
             Range range = ranges[gpu];
@@ -252,16 +258,17 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
                 scheduler.enqueue_task("copy A slice", gpu, next_iteration_event, copy_rect_func, &copy_aslice_args);
                 
                 //
+                // Copy over the panel updated by the last 'dgetrf' call
+                // 
+                CopyRectArgs copy_panel_args{&panel[gpu], a, lda, j, m, j, j+jb, streams[gpu]};
+                scheduler.enqueue_task("copy panel", gpu, dgetrf_task, copy_rect_func, &copy_panel_args);
+
+                //
                 // Apply row swaps to A right of the current panel
                 // 
                 CuDlaswpArgs cudlaswp_args{m-j, range.size(), &aslices[gpu], m-j, 1, jb, &ipiv[j], handles[gpu]};
                 scheduler.enqueue_task("cudlaswp", gpu, dgetrf_task, cudlaswp_func, &cudlaswp_args);
 
-                //
-                // Copy over the panel updated by the last 'dgetrf' call
-                // 
-                CopyRectArgs copy_panel_args{&panel[gpu], a, lda, j, m, j, j+jb, streams[gpu]};
-                scheduler.enqueue_task("copy panel", gpu, dgetrf_task, copy_rect_func, &copy_panel_args);
 
                 //
                 // Update the upper part of my A slice
@@ -284,17 +291,8 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
                 //
                 CopyBackArgs copy_back_args{a, lda, &aslices[gpu], j, m, range.begin, range.end};
                 scheduler.enqueue_task("copy back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
-            }
 
-        }
-
-        for (int gpu = 0; gpu < ngpus; gpu++) {
-            Range range = ranges[gpu];
-            if (range.size()) {
-                FreeArgs free_args{&panel[gpu], &aslices[gpu]};
-                scheduler.enqueue_task("free temp", gpu, NULL_EVENT, free_temp_func, &free_args);
-
-                CuSynchronizeArgs sync_args;
+                CuSynchronizeArgs sync_args{};
                 int done_event = scheduler.enqueue_task("synchronize", gpu, NULL_EVENT, cusynchronize, &sync_args);
                 done_events.push_back(done_event);
             }
@@ -305,6 +303,16 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
     }
 
     scheduler.run();
+
+    for (int gpu = 0; gpu < ngpus; gpu++) {
+        Range range = ranges[gpu];
+
+        if (range.size()) {
+            CUDA_CALL(cudaSetDevice(gpu));
+            CUDA_CALL(cudaFree(panel[gpu]));
+            CUDA_CALL(cudaFree(aslices[gpu]));
+        }
+    }
 
     for (int j = 0; j < n; j += nb) {
         int jb = std::min(nb, n-j);
@@ -351,7 +359,7 @@ int main(int argc, char** argv) {
 
 
     double* A;
-    double* Acopy;
+    double* Acopy = NULL;
     double* b;
 
     size_t data_size = sizeof(double) * lda * n;
