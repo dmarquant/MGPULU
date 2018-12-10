@@ -249,52 +249,54 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         std::vector<Range> ranges = partition_min(j+jb, n, ngpus, jb);
 
         for (int gpu = 0; gpu < ngpus; gpu++) {
-            Range range = ranges[gpu];
-            if (range.size()) {
-                //
-                // Copy over the part of A this GPU is working on
-                //
-                CopyRectArgs copy_aslice_args{&aslices[gpu], a, lda, j, m, range.begin, range.end, streams[gpu]};
-                scheduler.enqueue_task("copy A slice", gpu, next_iteration_event, copy_rect_func, &copy_aslice_args);
-                
-                //
-                // Copy over the panel updated by the last 'dgetrf' call
-                // 
-                CopyRectArgs copy_panel_args{&panel[gpu], a, lda, j, m, j, j+jb, streams[gpu]};
-                scheduler.enqueue_task("copy panel", gpu, dgetrf_task, copy_rect_func, &copy_panel_args);
+            if (ranges[gpu].size()) {
+                auto subranges = partition_tiles(ranges[gpu].begin, ranges[gpu].end, 4*nb);
+                for (auto range : subranges) {
+                    //
+                    // Copy over the part of A this GPU is working on
+                    //
+                    CopyRectArgs copy_aslice_args{&aslices[gpu], a, lda, j, m, range.begin, range.end, streams[gpu]};
+                    scheduler.enqueue_task("copy A slice", gpu, next_iteration_event, copy_rect_func, &copy_aslice_args);
+                    
+                    //
+                    // Copy over the panel updated by the last 'dgetrf' call
+                    // 
+                    CopyRectArgs copy_panel_args{&panel[gpu], a, lda, j, m, j, j+jb, streams[gpu]};
+                    scheduler.enqueue_task("copy panel", gpu, dgetrf_task, copy_rect_func, &copy_panel_args);
 
-                //
-                // Apply row swaps to A right of the current panel
-                // 
-                CuDlaswpArgs cudlaswp_args{m-j, range.size(), &aslices[gpu], m-j, 1, jb, &ipiv[j], handles[gpu]};
-                scheduler.enqueue_task("cudlaswp", gpu, dgetrf_task, cudlaswp_func, &cudlaswp_args);
+                    //
+                    // Apply row swaps to A right of the current panel
+                    // 
+                    CuDlaswpArgs cudlaswp_args{m-j, range.size(), &aslices[gpu], m-j, 1, jb, &ipiv[j], handles[gpu]};
+                    scheduler.enqueue_task("cudlaswp", gpu, dgetrf_task, cudlaswp_func, &cudlaswp_args);
 
 
-                //
-                // Update the upper part of my A slice
-                //
-                CuDtrsmArgs cudtrsm_args{jb, range.size(), &panel[gpu], m-j, &aslices[gpu], m-j, handles[gpu]};
-                scheduler.enqueue_task("cudtrsm", gpu, NULL_EVENT, cudtrsm_func, &cudtrsm_args);
+                    //
+                    // Update the upper part of my A slice
+                    //
+                    CuDtrsmArgs cudtrsm_args{jb, range.size(), &panel[gpu], m-j, &aslices[gpu], m-j, handles[gpu]};
+                    scheduler.enqueue_task("cudtrsm", gpu, NULL_EVENT, cudtrsm_func, &cudtrsm_args);
 
-                //
-                // Update the rest of my A slice
-                //
-                CuDgemmArgs cudgemm_args{jb, m-(j+jb), range.size(), jb,
-                                         &panel[gpu], m-j, 
-                                         &aslices[gpu], m-j,
-                                         &aslices[gpu], m-j,
-                                         handles[gpu]};
-                scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cudgemm_func, &cudgemm_args);
+                    //
+                    // Update the rest of my A slice
+                    //
+                    CuDgemmArgs cudgemm_args{jb, m-(j+jb), range.size(), jb,
+                                             &panel[gpu], m-j, 
+                                             &aslices[gpu], m-j,
+                                             &aslices[gpu], m-j,
+                                             handles[gpu]};
+                    scheduler.enqueue_task("cudgemm", gpu, NULL_EVENT, cudgemm_func, &cudgemm_args);
 
-                //
-                // Copy back my updated slice
-                //
-                CopyBackArgs copy_back_args{a, lda, &aslices[gpu], j, m, range.begin, range.end};
-                scheduler.enqueue_task("copy back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
+                    //
+                    // Copy back my updated slice
+                    //
+                    CopyBackArgs copy_back_args{a, lda, &aslices[gpu], j, m, range.begin, range.end};
+                    scheduler.enqueue_task("copy back", gpu, NULL_EVENT, copy_back_func, &copy_back_args);
 
-                CuSynchronizeArgs sync_args{};
-                int done_event = scheduler.enqueue_task("synchronize", gpu, NULL_EVENT, cusynchronize, &sync_args);
-                done_events.push_back(done_event);
+                    CuSynchronizeArgs sync_args{};
+                    int done_event = scheduler.enqueue_task("synchronize", gpu, NULL_EVENT, cusynchronize, &sync_args);
+                    done_events.push_back(done_event);
+                }
             }
 
         }

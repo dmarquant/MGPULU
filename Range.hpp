@@ -32,6 +32,20 @@ std::vector<Range> partition(int begin, int end, int n) {
     return subranges;
 }
 
+std::vector<Range> partition_tiles(int begin, int end, int tilesize) {
+    std::vector<Range> subranges;
+
+    while (begin < end) {
+        Range r;
+        r.begin = begin;
+        r.end = std::min(begin + tilesize, end);
+        begin = r.end;
+        subranges.push_back(r);
+    }
+
+    return subranges;
+}
+
 std::vector<Range> partition_min(int begin, int end, int n, int min_size) {
     std::vector<Range> subranges;
     subranges.reserve(n);
