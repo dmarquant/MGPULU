@@ -1,11 +1,14 @@
 HEADERS=tasks.hpp util.h Range.hpp MatrixView.hpp makefile
-CXXFLAGS=-std=c++11 -O3 -g -Wall
+CXXFLAGS=-std=c++11 -O0 -g -Wall
 INCLUDES=-I${CUDAHOME}/include -I${HOME}/openblas/include
 LIBS=-L${CUDAHOME}/lib64 -L${HOME}/openblas/lib -lcudart -lcublas -lcurand -lpthread -lopenblas
 
-all: single_lu lu task_lu task_lu_overlap
+all: single_lu lu task_lu task_lu_overlap ferry_lu
 
 single_lu: single_lu.cpp $(HEADERS)
+	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS)
+
+ferry_lu: ferry_lu.cpp $(HEADERS)
 	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS)
 
 lu: lu.cpp $(HEADERS)

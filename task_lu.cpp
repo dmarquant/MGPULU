@@ -31,7 +31,20 @@ struct DgetrfArgs {
 
 void dgetrf_func(int device_id, void* p) {
     DgetrfArgs* args = static_cast<DgetrfArgs*>(p);
-    LAPACKE_dgetrf(LAPACK_COL_MAJOR, args->m, args->n, args->A, args->lda, args->ipiv);
+
+    double* local_A = (double*)malloc(sizeof(double) * args->m * args->n);
+    CUDA_CALL(cudaMemcpy2DAsync(local_A, sizeof(double) * args->m,
+                                args->A, sizeof(double) * args->lda,
+                                args->m * sizeof(double), args->n,
+                                cudaMemcpyDeviceToHost, args->stream));
+
+    LAPACKE_dgetrf(LAPACK_COL_MAJOR, args->m, args->n, local_A, args->m, args->ipiv);
+
+    CUDA_CALL(cudaMemcpy2DAsync(args->A, sizeof(double) * args->lda,
+                                local_A, sizeof(double) * args->m,
+                                args->m * sizeof(double), args->n,
+                                cudaMemcpyHostToDevice, args->stream));
+    free(local_A);
 }
 
 struct DlaswpArgs {
@@ -215,6 +228,7 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
     GpuTaskScheduler scheduler(ngpus, streams);
 
     int next_iteration_event = NULL_EVENT;
+    int next_dgetrf_event = NULL_EVENT;
 
     double** panel   = (double**)malloc(sizeof(double*) * ngpus);
     double** aslices = (double**)malloc(sizeof(double*) * ngpus);
@@ -234,8 +248,9 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         int jb = std::min(nb, n-j);
 
         DgetrfArgs dgetrf_args{m-j, jb, &a[j + j*lda], lda, &ipiv[j]};
-        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_iteration_event,
+        int dgetrf_task = scheduler.enqueue_task("dgetrf", CPU_DEVICE, next_dgetrf_event,
                                                  dgetrf_func, &dgetrf_args);
+        next_dgetrf_event = NULL_EVENT;
 
         next_iteration_event = scheduler.aggregate_event({dgetrf_task, next_iteration_event});
 
@@ -246,11 +261,11 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
         done_events.reserve(ngpus+1);
         done_events.push_back(swap_left_task);
 
-        std::vector<Range> ranges = partition_min(j+jb, n, ngpus, jb);
+        std::vector<Range> ranges = partition_min(j+jb, n, ngpus, 4*nb);
 
         for (int gpu = 0; gpu < ngpus; gpu++) {
             if (ranges[gpu].size()) {
-                auto subranges = partition_tiles(ranges[gpu].begin, ranges[gpu].end, 4*nb);
+                auto subranges = partition_tiles(ranges[gpu].begin, ranges[gpu].end, nb);
                 for (auto range : subranges) {
                     //
                     // Copy over the part of A this GPU is working on
@@ -296,6 +311,9 @@ int dgetrf(int ngpus, cudaStream_t* streams, cublasHandle_t* handles, int m, int
                     CuSynchronizeArgs sync_args{};
                     int done_event = scheduler.enqueue_task("synchronize", gpu, NULL_EVENT, cusynchronize, &sync_args);
                     done_events.push_back(done_event);
+
+                    if (next_dgetrf_event == NULL_EVENT)
+                        next_dgetrf_event = done_event;
                 }
             }
 
