@@ -73,6 +73,9 @@ int main(int argc, char** argv) {
     int n = m;
     int lda = m;
 
+    int ngpus;
+    CUDA_CALL(cudaGetDeviceCount(&ngpus));
+
     cudaStream_t stream;
     cublasHandle_t handle;
 
@@ -115,7 +118,7 @@ int main(int argc, char** argv) {
     dgetrf(handle, m, n, A, m, ipiv);
     double endTime = get_real_time();
     
-    printf("ngpus=%d,matrix_size=%d,time_s=%f\n", 1, n, endTime-startTime);
+    printf("%s,%d,%d,%f\n", argv[0], ngpus, n, endTime-startTime);
 
     // Extract the solution vector
     //

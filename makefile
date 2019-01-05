@@ -15,7 +15,7 @@ lu: lu.cpp $(HEADERS)
 	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS)
 
 task_lu: task_lu.cpp $(HEADERS)
-	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) -DPROFILE_TASKS #-DDEBUG_TASKS
+	g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) #-DPROFILE_TASKS #-DDEBUG_TASKS
 
 #task_lu_overlap: task_lu.cpp $(HEADERS)
 	#g++ $< -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) -DOVERLAP -DPROFILE_TASKS #-DDEBUG_TASKS

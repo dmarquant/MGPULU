@@ -413,7 +413,7 @@ int main(int argc, char** argv) {
     dgetrf(ngpus, streams, handles, m, n, A, m, ipiv);
     double endTime = get_real_time();
     
-    printf("ngpus=%d,matrix_size=%d,time_s=%f\n", ngpus, n, endTime-startTime);
+    printf("%s,%d,%d,%f\n", argv[0], ngpus, n, endTime-startTime);
 
     // Extract the solution vector
     //
