@@ -1,0 +1,20 @@
+LOOP FUSION!!!!!!!!!!!!!!!!!!
+-----------------------------
+==29218== Unified Memory profiling result:
+Device "TITAN Xp (0)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+ 7513300  47.847KB  4.0000KB  0.9961MB  342.8378GB  39.498235s  Host To Device
+  708668  516.98KB  4.0000KB  2.0000MB  349.3955GB  31.083658s  Device To Host
+ 1156138         -         -         -           -  147.48633s  Gpu page fault groups
+     336  4.0000KB  4.0000KB  4.0000KB  1.312500MB           -  Memory thrashes
+   95662  73.498KB  4.0000KB  0.9961MB  6.705280GB  842.9756ms  Transfers from Device
+   32284  46.115KB  4.0000KB  0.9883MB  1.419834GB  187.4726ms  Transfers to Device
+Device "TITAN Xp (1)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+ 7368080  47.790KB  4.0000KB  0.9961MB  335.8105GB  38.970557s  Host To Device
+  651562  548.67KB  4.0000KB  2.0000MB  340.9313GB  30.757608s  Device To Host
+ 1125808         -         -         -           -  139.87860s  Gpu page fault groups
+     336  4.0000KB  4.0000KB  4.0000KB  1.312500MB           -  Memory thrashes
+   32284  46.115KB  4.0000KB  0.9883MB  1.419834GB  187.4726ms  Transfers from Device
+   95662  73.498KB  4.0000KB  0.9961MB  6.705280GB  842.9756ms  Transfers to Device
+Total CPU Page faults: 18030

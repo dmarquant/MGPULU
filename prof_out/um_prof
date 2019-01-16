@@ -1,0 +1,37 @@
+LOOP FUSION!!!!!!!!!!!!!!!!!!
+-----------------------------
+==27977== Unified Memory profiling result:
+Device "TITAN Xp (0)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+   55678  59.191KB  4.0000KB  0.9961MB  3.142994GB  345.2968ms  Host To Device
+  164515  75.209KB  4.0000KB  2.0000MB  11.79991GB   1.125089s  Device To Host
+   45953         -         -         -           -   5.603260s  Gpu page fault groups
+    1919  4.0000KB  4.0000KB  4.0000KB  7.496094MB           -  Memory thrashes
+   57608  68.128KB  4.0000KB  0.9961MB  3.742912GB  449.2373ms  Transfers from Device
+   79543  44.132KB  4.0000KB  0.9883MB  3.347771GB  436.6833ms  Transfers to Device
+Device "TITAN Xp (1)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  119442  50.586KB  4.0000KB  0.9961MB  5.762253GB  646.0805ms  Host To Device
+   65558  46.611KB  4.0000KB  0.9961MB  2.914211GB  320.7176ms  Device To Host
+   27975         -         -         -           -   4.939249s  Gpu page fault groups
+       7         -         -         -           -  4.065923ms  Page throttles
+    1728  4.0000KB  4.0000KB  4.0000KB  6.750000MB           -  Memory thrashes
+   79543  44.132KB  4.0000KB  0.9883MB  3.347771GB  436.6833ms  Transfers from Device
+   57608  68.128KB  4.0000KB  0.9961MB  3.742912GB  449.2373ms  Transfers to Device
+Device "TITAN X (Pascal) (2)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+   75573  64.269KB  4.0000KB  0.9961MB  4.631985GB  500.8149ms  Host To Device
+   32094  32.577KB  4.0000KB  984.00KB  0.997097GB  118.9014ms  Device To Host
+   28236         -         -         -           -   4.787489s  Gpu page fault groups
+    4302  4.0000KB  4.0000KB  4.0000KB  16.80469MB           -  Memory thrashes
+   21010  38.926KB  4.0000KB  0.9961MB  798.6680MB  103.4803ms  Transfers from Device
+   14878  32.808KB  4.0000KB  988.00KB  476.6719MB  62.68154ms  Transfers to Device
+Device "TITAN X (Pascal) (3)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+   47421  76.915KB  4.0000KB  0.9961MB  3.478455GB  399.4364ms  Host To Device
+     876  24.726KB  4.0000KB  0.9844MB  21.15234MB  2.432064ms  Device To Host
+   18308         -         -         -           -   3.421419s  Gpu page fault groups
+    4349  4.0000KB  4.0000KB  4.0000KB  16.98828MB           -  Memory thrashes
+   14878  32.808KB  4.0000KB  988.00KB  476.6719MB  62.68154ms  Transfers from Device
+   21010  38.926KB  4.0000KB  0.9961MB  798.6680MB  103.4803ms  Transfers to Device
+Total CPU Page faults: 36472

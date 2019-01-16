@@ -1,0 +1,18 @@
+TASK SCHEDULING!!!!!!!!!!!!!!!!!!
+---------------------------------
+==8061== Unified Memory profiling result:
+Device "TITAN Xp (0)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  278602  129.62KB  4.0000KB  0.9961MB  34.43982GB   3.409548s  Host To Device
+   94839  449.12KB  4.0000KB  2.0000MB  40.62106GB   3.505846s  Device To Host
+  396163         -         -         -           -  44.529830s  Gpu page fault groups
+ 1044281  94.033KB  4.0000KB  0.9961MB  93.64858GB  10.634067s  Transfers from Device
+  891791  101.44KB  4.0000KB  0.9961MB  86.27494GB   9.993840s  Transfers to Device
+Device "TITAN Xp (1)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  343486  119.07KB  4.0000KB  0.9922MB  39.00545GB   4.001761s  Host To Device
+   84729  485.45KB  4.0000KB  2.0000MB  39.22653GB   3.329809s  Device To Host
+  398275         -         -         -           -  45.891421s  Gpu page fault groups
+  891791  101.44KB  4.0000KB  0.9961MB  86.27494GB   9.993840s  Transfers from Device
+ 1044281  94.033KB  4.0000KB  0.9961MB  93.64858GB  10.634067s  Transfers to Device
+Total CPU Page faults: 48376

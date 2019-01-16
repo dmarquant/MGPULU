@@ -1,0 +1,38 @@
+TASK SCHEDULING!!!!!!!!!!!!!!!!!!
+---------------------------------
+==30965== Unified Memory profiling result:
+Device "TITAN Xp (0)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  104960  83.386KB  4.0000KB  0.9961MB  8.346722GB  855.9057ms  Host To Device
+  125966  59.186KB  4.0000KB  0.9961MB  7.110050GB  714.2633ms  Device To Host
+   73962         -         -         -           -   9.103885s  Gpu page fault groups
+   13163  4.0000KB  4.0000KB  4.0000KB  51.41797MB           -  Memory thrashes
+  114978  59.573KB  4.0000KB  0.9961MB  6.532352GB  781.1252ms  Transfers from Device
+  193291  47.541KB  4.0000KB  0.9961MB  8.763573GB   1.099947s  Transfers to Device
+Device "TITAN Xp (1)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  143613  66.469KB  4.0000KB  0.9922MB  9.103638GB  957.0118ms  Host To Device
+  125110  60.106KB  4.0000KB  0.9922MB  7.171505GB  699.5293ms  Device To Host
+   42843         -         -         -           -   6.787935s  Gpu page fault groups
+       1         -         -         -           -  491.6940us  Page throttles
+   13565  4.0000KB  4.0000KB  4.0000KB  52.98828MB           -  Memory thrashes
+  193291  47.541KB  4.0000KB  0.9961MB  8.763573GB   1.099947s  Transfers from Device
+  114978  59.573KB  4.0000KB  0.9961MB  6.532352GB  781.1252ms  Transfers to Device
+Device "TITAN X (Pascal) (2)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+   96611  54.594KB  4.0000KB  0.9961MB  5.030075GB  565.0648ms  Host To Device
+  183557  62.151KB  4.0000KB  0.9961MB  10.87982GB   1.061544s  Device To Host
+   25051         -         -         -           -   4.096807s  Gpu page fault groups
+       3         -         -         -           -  1.354542ms  Page throttles
+   17124  4.0000KB  4.0000KB  4.0000KB  66.89063MB           -  Memory thrashes
+   53427  74.471KB  4.0000KB  0.9961MB  3.794472GB  450.9283ms  Transfers from Device
+   86369  65.493KB  4.0000KB  0.9961MB  5.394600GB  655.0960ms  Transfers to Device
+Device "TITAN X (Pascal) (3)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+   64728  88.186KB  4.0000KB  0.9961MB  5.443687GB  587.3912ms  Host To Device
+   90305  87.292KB  4.0000KB  0.9961MB  7.517746GB  710.3994ms  Device To Host
+   21248         -         -         -           -   3.324270s  Gpu page fault groups
+   17125  4.0000KB  4.0000KB  4.0000KB  66.89453MB           -  Memory thrashes
+   86369  65.493KB  4.0000KB  0.9961MB  5.394600GB  655.0960ms  Transfers from Device
+   53427  74.471KB  4.0000KB  0.9961MB  3.794472GB  450.9283ms  Transfers to Device
+Total CPU Page faults: 32778

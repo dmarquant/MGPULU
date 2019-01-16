@@ -1,0 +1,36 @@
+LOOP FUSION!!!!!!!!!!!!!!!!!!
+-----------------------------
+==28393== Unified Memory profiling result:
+Device "TITAN Xp (0)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  129085  83.861KB  4.0000KB  0.9961MB  10.32385GB   1.117597s  Host To Device
+  148804  131.96KB  4.0000KB  2.0000MB  18.72686GB   1.726056s  Device To Host
+   86437         -         -         -           -  11.056643s  Gpu page fault groups
+     368  4.0000KB  4.0000KB  4.0000KB  1.437500MB           -  Memory thrashes
+  114110  81.163KB  4.0000KB  0.9961MB  8.832558GB   1.094037s  Transfers from Device
+   94213  44.775KB  4.0000KB  0.9961MB  4.023052GB  524.7143ms  Transfers to Device
+Device "TITAN Xp (1)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  183908  62.332KB  4.0000KB  0.9961MB  10.93242GB   1.187016s  Host To Device
+   87192  123.37KB  4.0000KB  2.0000MB  10.25855GB   1.016259s  Device To Host
+   53770         -         -         -           -   8.750319s  Gpu page fault groups
+     397  4.0000KB  4.0000KB  4.0000KB  1.550781MB           -  Memory thrashes
+   94213  44.775KB  4.0000KB  0.9961MB  4.023052GB  524.7143ms  Transfers from Device
+  114110  81.163KB  4.0000KB  0.9961MB  8.832558GB   1.094037s  Transfers to Device
+Device "TITAN X (Pascal) (2)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+  182244  72.232KB  4.0000KB  0.9961MB  12.55424GB   1.349455s  Host To Device
+   29461  118.25KB  4.0000KB  2.0000MB  3.322315GB  328.2776ms  Device To Host
+   61674         -         -         -           -   8.555912s  Gpu page fault groups
+    2928  4.0000KB  4.0000KB  4.0000KB  11.43750MB           -  Memory thrashes
+   47107  67.279KB  4.0000KB  0.9961MB  3.022514GB  374.4527ms  Transfers from Device
+   25042  53.903KB  4.0000KB  0.9922MB  1.287315GB  158.4512ms  Transfers to Device
+Device "TITAN X (Pascal) (3)"
+   Count  Avg Size  Min Size  Max Size  Total Size  Total Time  Name
+   69039  76.982KB  4.0000KB  0.9961MB  5.068581GB  562.1970ms  Host To Device
+    3710  350.40KB  4.0000KB  2.0000MB  1.239746GB  112.9444ms  Device To Host
+   28312         -         -         -           -   4.214967s  Gpu page fault groups
+    2915  4.0000KB  4.0000KB  4.0000KB  11.38672MB           -  Memory thrashes
+   25042  53.903KB  4.0000KB  0.9922MB  1.287315GB  158.4512ms  Transfers from Device
+   47107  67.279KB  4.0000KB  0.9961MB  3.022514GB  374.4527ms  Transfers to Device
+Total CPU Page faults: 42391
